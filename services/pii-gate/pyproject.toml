@@ -1,0 +1,31 @@
+[project]
+name = "kb-pii-gate"
+version = "0.1.0"
+description = "Pattern rules + LLM detector; ingestion gate and chat output filter (INV-7)"
+requires-python = ">=3.12"
+dependencies = [
+    "kb-common",
+    "kb-schemas",
+    "kb-authz",
+    "kb-ports",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "kb-vntext",
+    "pyyaml>=6.0",
+    "kb-idp",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kb_pii_gate"]
+
+[tool.uv.sources]
+kb-common = { workspace = true }
+kb-schemas = { workspace = true }
+kb-authz = { workspace = true }
+kb-ports = { workspace = true }
+kb-vntext = { workspace = true }
+kb-idp = { workspace = true }

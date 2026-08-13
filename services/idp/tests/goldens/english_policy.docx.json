@@ -1,0 +1,25 @@
+{
+  "block_count": 7,
+  "block_types": {
+    "heading": 5,
+    "paragraph": 2
+  },
+  "detected_refs": [],
+  "doc_meta": {
+    "detected_title": "Outsourcing Risk Policy",
+    "language": "en",
+    "legal_number": null,
+    "page_count": 1,
+    "source_format": "docx"
+  },
+  "section_paths": [
+    "Chapter I",
+    "Chapter I > Article 4",
+    "Chapter I > Article 4 > Khoản 1",
+    "Chapter I > Section 2"
+  ],
+  "tables": [],
+  "text_chars": 396,
+  "text_sha256": "d62be086e147d366d1e4e05ce6ceda5c90edb6ce62c52fb9f48aeafb81c12da3",
+  "warnings": []
+}

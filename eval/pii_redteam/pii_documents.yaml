@@ -1,0 +1,266 @@
+# Forty documents that must never be published (M4 acceptance criterion).
+#
+# Each is a plausible thing someone actually uploads to a knowledge base: a complaint file, a
+# branch's customer list pasted into a procedure, a training deck built from a real account, a
+# scanned form. If the gate lets one of these through, a customer's identity reaches everyone
+# with a search box.
+#
+# `expect: block` is the assertion. `kind` records which rule ought to catch it — the tests do
+# not require that exact rule to fire (defence in depth is the point), but a change that shifts
+# a document from one rule to another is worth seeing in a diff.
+
+- id: pii-001
+  kind: cccd
+  note: identity number in a KYC record
+  text: |
+    Hồ sơ nhận biết khách hàng
+    Họ và tên: Nguyễn Văn Minh
+    Số CCCD: 001199012345, cấp ngày 12/05/2021 tại Cục Cảnh sát QLHC về TTXH.
+
+- id: pii-002
+  kind: cccd
+  note: identity number without a label, still a valid CCCD
+  text: |
+    Khách hàng xuất trình giấy tờ 079201004567 khi mở tài khoản tại quầy.
+
+- id: pii-003
+  kind: cmnd
+  note: legacy identity number with context
+  text: |
+    Chứng minh nhân dân số 023456789 do Công an TP. Hồ Chí Minh cấp.
+
+- id: pii-004
+  kind: pan
+  note: card number in a dispute file
+  text: |
+    Khiếu nại giao dịch thẻ: số thẻ 4111111111111111, giao dịch ngày 03/02/2026.
+
+- id: pii-005
+  kind: pan
+  note: card number written with spaces
+  text: |
+    Thẻ tín dụng 5555 5555 5555 4444 bị từ chối tại điểm chấp nhận thẻ.
+
+- id: pii-006
+  kind: account_number
+  note: account number with its label
+  text: |
+    Số tài khoản: 0123456789 mở tại chi nhánh Hoàn Kiếm, số dư hiện tại 254.000.000 VND.
+
+- id: pii-007
+  kind: account_number
+  note: abbreviated label
+  text: |
+    Chuyển khoản đến STK 19001234567890 của người thụ hưởng tại ngân hàng khác.
+
+- id: pii-008
+  kind: name_with_balance
+  note: a named person and an amount in the same paragraph
+  text: |
+    Ông Trần Quốc Hưng có số dư tiền gửi 1.250.000.000 VND tại chi nhánh Cầu Giấy.
+
+- id: pii-009
+  kind: name_with_balance
+  note: salary disclosure
+  text: |
+    Bà Lê Thị Hồng Nhung, mức lương hằng tháng 45.000.000 đồng, đề nghị vay tín chấp.
+
+- id: pii-010
+  kind: phone
+  note: labelled phone number
+  text: |
+    Khách hàng liên hệ số điện thoại 0912345678 để xác nhận giao dịch.
+
+- id: pii-011
+  kind: email
+  note: personal email in a complaint
+  text: |
+    Khách hàng gửi khiếu nại từ địa chỉ nguyenvanminh1987@gmail.com ngày 10/01/2026.
+
+- id: pii-012
+  kind: tax_code
+  note: tax code of an individual business
+  text: |
+    Hộ kinh doanh có mã số thuế 0101234567 đề nghị mở tài khoản thanh toán.
+
+- id: pii-013
+  kind: address
+  note: residential address
+  text: |
+    Địa chỉ thường trú: số 25 đường Láng Hạ, phường Thành Công, quận Ba Đình, Hà Nội.
+
+- id: pii-014
+  kind: date_of_birth
+  note: date of birth with a name
+  text: |
+    Chủ tài khoản: Phạm Minh Đức, ngày sinh: 14/09/1985, nghề nghiệp: kỹ sư xây dựng.
+
+- id: pii-015
+  kind: account_number
+  note: customer list pasted into a procedure
+  text: |
+    Danh sách khách hàng ưu tiên quý I:
+    Số tài khoản 0011002233 - Nguyễn Thị Lan - 3.400.000.000 VND
+    Số tài khoản 0011002244 - Trần Văn Bảo - 2.100.000.000 VND
+
+- id: pii-016
+  kind: cccd
+  note: identity number inside a scanned form transcription
+  text: |
+    GIẤY ĐỀ NGHỊ MỞ TÀI KHOẢN
+    Họ và tên: Đỗ Thị Mai Anh
+    Số căn cước công dân: 026189003211
+    Nơi cấp: Cục Cảnh sát quản lý hành chính về trật tự xã hội
+
+- id: pii-017
+  kind: pan
+  note: card number in a training deck
+  text: |
+    Ví dụ giao dịch thực tế: thẻ 4012888888881881 thanh toán 2.500.000 VND tại siêu thị.
+
+- id: pii-018
+  kind: account_number
+  note: account number in an internal email quoted in a document
+  text: |
+    Đề nghị kiểm tra tài khoản số 060099887766 do khách hàng phản ánh chưa nhận được tiền.
+
+- id: pii-019
+  kind: name_with_balance
+  note: loan file summary
+  text: |
+    Khách hàng: Vũ Đình Khánh. Dư nợ vay: 12.000.000.000 đồng. Tài sản bảo đảm: quyền sử
+    dụng đất tại quận Long Biên.
+
+- id: pii-020
+  kind: phone
+  note: contact list
+  text: |
+    Danh bạ khách hàng doanh nghiệp: người đại diện Hoàng Anh Tuấn, sđt 0987654321.
+
+- id: pii-021
+  kind: cccd
+  note: identity number in an AML case narrative
+  text: |
+    Báo cáo giao dịch đáng ngờ: chủ tài khoản CCCD 031085001122 thực hiện 14 giao dịch nộp
+    tiền mặt trong một ngày.
+
+- id: pii-022
+  kind: account_number
+  note: statement extract
+  text: |
+    Sao kê tài khoản số 12345678901 từ ngày 01/01/2026 đến 31/01/2026, số dư cuối kỳ
+    87.500.000 VND.
+
+- id: pii-023
+  kind: email
+  note: staff-collected customer contact sheet
+  text: |
+    Khách hàng đăng ký nhận sao kê điện tử tại email: tranthihoa.kh@yahoo.com.
+
+- id: pii-024
+  kind: name_with_balance
+  note: complaint narrative
+  text: |
+    Bà Nguyễn Thị Thu phản ánh tài khoản bị trừ 15.000.000 VND không rõ lý do vào ngày
+    05/02/2026.
+
+- id: pii-025
+  kind: cmnd
+  note: old identity number in an archived file
+  text: |
+    Hồ sơ lưu trữ năm 2014: khách hàng xuất trình CMND 012345678 khi ký hợp đồng tín dụng.
+
+- id: pii-026
+  kind: address
+  note: address in a card delivery instruction
+  text: |
+    Địa chỉ giao thẻ: số 148 đường Nguyễn Trãi, phường Thượng Đình, quận Thanh Xuân.
+
+- id: pii-027
+  kind: account_number
+  note: payroll file
+  text: |
+    Bảng thanh toán lương: số tài khoản 0451000123456, người hưởng Lê Quang Vinh,
+    số tiền 32.000.000 VND.
+
+- id: pii-028
+  kind: pan
+  note: masked card that is not actually masked
+  text: |
+    Số thẻ khách hàng cung cấp qua tổng đài: 6011111111111117.
+
+- id: pii-029
+  kind: date_of_birth
+  note: minor's data in a guardian account file
+  text: |
+    Người giám hộ: Trần Văn Sơn. Chủ tài khoản: Trần Minh Quân, sinh ngày 02/03/2012.
+
+- id: pii-030
+  kind: name_with_balance
+  note: VIP customer note without an explicit identifier
+  text: |
+    Ông Đặng Hữu Phước, khách hàng ưu tiên tại phòng giao dịch Bến Thành, tổng tài sản gửi
+    28.500.000.000 đồng, đề nghị được cấp hạn mức thấu chi riêng.
+
+- id: pii-031
+  kind: account_number
+  note: account number split across a table row
+  text: |
+    STT | Số tài khoản | Chủ tài khoản | Số dư
+    1 | 0987654321098 | Nguyễn Hải Yến | 640.000.000 VND
+
+- id: pii-032
+  kind: tax_code
+  note: individual tax code with a branch suffix
+  text: |
+    Mã số thuế người nộp thuế: 8901234567-001, đăng ký tại Chi cục Thuế quận Đống Đa.
+
+- id: pii-033
+  kind: cccd
+  note: identity number in a power of attorney
+  text: |
+    Người được ủy quyền: Bùi Thị Ngọc Hà, số căn cước 040192007788, thay mặt chủ tài khoản
+    thực hiện giao dịch rút tiền.
+
+- id: pii-034
+  kind: phone
+  note: OTP recovery record
+  text: |
+    Yêu cầu cấp lại mật khẩu gửi tới số điện thoại đăng ký 0356789012 của khách hàng.
+
+- id: pii-035
+  kind: account_number
+  note: fraud investigation working note
+  text: |
+    Tài khoản nghi vấn số 19008877665544 nhận tiền từ 23 tài khoản khác nhau trong 48 giờ.
+
+- id: pii-036
+  kind: name_with_balance
+  note: branch performance report naming individual customers
+  text: |
+    Khách hàng Ngô Thanh Tùng đóng góp 4.200.000.000 VND vào chỉ tiêu huy động của chi nhánh.
+
+- id: pii-037
+  kind: email
+  note: bulk contact export
+  text: |
+    Danh sách gửi thông báo phí: levanhoang@company.vn; phamthihue@outlook.com.
+
+- id: pii-038
+  kind: address
+  note: address collected for card delivery, in a process document
+  text: |
+    Nơi ở hiện tại: số 7 ngõ 12 phố Trần Duy Hưng, phường Trung Hòa, quận Cầu Giấy, Hà Nội.
+
+- id: pii-039
+  kind: account_number
+  note: reconciliation worksheet
+  text: |
+    Chênh lệch phát sinh tại tài khoản số 0031000456789, đề nghị đối chiếu với sổ phụ.
+
+- id: pii-040
+  kind: cccd
+  note: identity number appearing only in a scanned table
+  text: |
+    Họ tên | Số CCCD | Ngày cấp
+    Trịnh Văn Long | 092087004455 | 18/07/2022

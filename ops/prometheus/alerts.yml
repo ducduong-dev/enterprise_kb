@@ -1,0 +1,51 @@
+groups:
+  - name: kb-invariants
+    rules:
+      # INV-5: publish must be searchable within 10s. Sustained breach means the outbox
+      # consumer is behind and the corpus is serving stale canonical text.
+      - alert: PublishToSearchableSlow
+        expr: histogram_quantile(0.95, sum by (le) (rate(kb_publish_to_searchable_seconds_bucket[10m]))) > 10
+        for: 10m
+        labels: { severity: page }
+        annotations:
+          summary: "publish-to-searchable p95 above the 10s budget (INV-5)"
+
+      - alert: OutboxBacklogGrowing
+        expr: kb_outbox_unprocessed > 100
+        for: 15m
+        labels: { severity: page }
+        annotations:
+          summary: "outbox backlog is not draining"
+
+      # Any policy violation is an attempted filter widening (INV-2) — always investigate.
+      - alert: PolicyViolationsObserved
+        expr: increase(kb_policy_violations_total[15m]) > 0
+        labels: { severity: ticket }
+        annotations:
+          summary: "server-side filter widening attempts detected"
+
+      - alert: AuditWriteFallback
+        expr: increase(kb_audit_fallback_total[5m]) > 0
+        labels: { severity: page }
+        annotations:
+          summary: "audit records are being written to logs instead of the database"
+
+  - name: kb-performance
+    rules:
+      # The load profile in ops/loadtest holds retrieval to 800 ms p95 at 50 concurrent.
+      # Sustained breach in production means the funnel is degrading before users complain.
+      - alert: RetrievalSlow
+        expr: histogram_quantile(0.95, sum by (le) (rate(kb_retrieval_seconds_bucket{stage="total"}[5m]))) > 0.8
+        for: 10m
+        labels: { severity: ticket }
+        annotations:
+          summary: "retrieval p95 above the 800 ms budget"
+
+      # Empty result sets are not an error, but a *sustained* stream of them usually means the
+      # index and the registry have diverged — the failure the outbox exists to prevent.
+      - alert: RetrievalReturningNothing
+        expr: histogram_quantile(0.5, sum by (le) (rate(kb_retrieval_results_bucket[15m]))) < 1
+        for: 15m
+        labels: { severity: ticket }
+        annotations:
+          summary: "half of retrievals are returning no chunks at all"

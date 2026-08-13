@@ -1,0 +1,191 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1b1f24;
+  --muted: #5c6773;
+  --line: #d7dde4;
+  --accent: #0b5fff;
+  --warn: #8a5300;
+  --error: #b3261e;
+  font-family: system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); }
+
+.topbar {
+  display: flex; align-items: center; gap: 1.5rem;
+  padding: 0.75rem 1.5rem; border-bottom: 1px solid var(--line);
+}
+.brand { font-weight: 600; }
+.topbar nav { display: flex; gap: 1rem; }
+.topbar a { color: var(--fg); text-decoration: none; }
+.topbar a:hover { color: var(--accent); }
+.user { margin-left: auto; display: flex; align-items: center; gap: 0.75rem; color: var(--muted); }
+
+.page { max-width: 46rem; margin: 2rem auto; padding: 0 1.5rem; }
+.hint { color: var(--muted); font-size: 0.9rem; }
+.optional { color: var(--muted); font-weight: 400; font-size: 0.85rem; }
+.required { color: var(--error); font-size: 0.85rem; }
+.error { color: var(--error); }
+.warn { color: var(--warn); }
+
+.form { display: grid; gap: 1rem; margin-top: 1.5rem; }
+.form label { display: grid; gap: 0.35rem; font-weight: 500; }
+.form input, .form select {
+  padding: 0.5rem; border: 1px solid var(--line); border-radius: 4px; font: inherit;
+}
+button {
+  padding: 0.55rem 1.1rem; border: 0; border-radius: 4px;
+  background: var(--accent); color: #fff; font: inherit; cursor: pointer;
+}
+button:disabled { background: var(--muted); cursor: progress; }
+
+.status { margin-top: 1.5rem; padding: 1rem; border: 1px solid var(--line); border-radius: 6px; }
+.table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+.table th, .table td { text-align: left; padding: 0.5rem; border-bottom: 1px solid var(--line); }
+.tasks { list-style: none; padding: 0; display: grid; gap: 0.75rem; }
+.tasks li { padding: 0.75rem; border: 1px solid var(--line); border-radius: 6px; }
+
+.page--wide { max-width: 60rem; }
+.search-form { display: grid; grid-template-columns: 1fr auto; gap: 0.75rem; margin: 1.5rem 0; }
+.search-input { padding: 0.6rem; border: 1px solid var(--line); border-radius: 4px; font: inherit; }
+.facets { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 1rem; align-items: end; }
+.facets label { display: grid; gap: 0.25rem; font-size: 0.9rem; color: var(--muted); }
+.facets select { padding: 0.35rem; border: 1px solid var(--line); border-radius: 4px; font: inherit; }
+.facets .checkbox { display: flex; flex-direction: row; align-items: center; gap: 0.4rem; }
+
+.results { list-style: none; padding: 0; display: grid; gap: 1rem; }
+.result { padding: 1rem; border: 1px solid var(--line); border-radius: 6px; }
+.result__citation { font-weight: 600; }
+.result__snippet { margin: 0.5rem 0; }
+.result__snippet mark { background: #fff3bf; padding: 0 0.1em; }
+.result__meta { color: var(--muted); font-size: 0.85rem; }
+.expansions { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+.expansions ul { list-style: none; padding: 0; display: grid; gap: 0.4rem; }
+.filter-id code { font-size: 0.8rem; }
+
+.review__header { border-bottom: 1px solid var(--line); padding-bottom: 0.75rem; }
+.review__body { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; margin-top: 1rem; }
+.review__blocks { display: grid; gap: 0.75rem; align-content: start; max-height: 70vh; overflow-y: auto; }
+.block { padding: 0.6rem; border: 1px solid var(--line); border-radius: 6px; }
+.block--low { border-color: var(--warn); background: #fffaf0; }
+.block--selected { outline: 2px solid var(--accent); }
+.block--dropped { opacity: 0.45; }
+.block__meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 0.3rem; }
+.block__text { width: 100%; font: inherit; padding: 0.4rem; border: 1px solid var(--line); border-radius: 4px; }
+.block__table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+.block__table td { border: 1px solid var(--line); padding: 0.25rem 0.4rem; }
+.link { background: none; border: 0; color: var(--accent); padding: 0.2rem 0; cursor: pointer; font: inherit; }
+.review__page { position: sticky; top: 1rem; align-self: start; }
+.review__page-header { color: var(--muted); font-size: 0.85rem; margin-bottom: 0.4rem; }
+.review__page-frame { position: relative; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.review__page-frame img { width: 100%; display: block; }
+.review__bbox { position: absolute; border: 2px solid var(--accent); background: rgba(11,95,255,0.12); pointer-events: none; }
+.review__decision { margin-top: 2rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+.review__actions { display: flex; gap: 0.75rem; margin-top: 1rem; }
+button.secondary { background: var(--muted); }
+.refs { list-style: none; padding: 0; display: grid; gap: 0.3rem; }
+
+/* Merge screen (M5). Three panes side by side on a wide screen; stacked below 60rem, where
+   comparing columns stops working and reading them in order is the honest fallback. */
+.merge { max-width: 78rem; }
+.merge-summary { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0 1.5rem; color: var(--muted); }
+.merge-row { border: 1px solid var(--line); border-radius: 6px; padding: 0.9rem; margin-bottom: 1rem; }
+.merge-row header { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-bottom: 0.4rem; }
+.merge-panes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin-top: 0.6rem; }
+.merge-panes .pane { border: 1px solid var(--line); border-radius: 4px; padding: 0.6rem; }
+.merge-panes .pane h4 { margin: 0 0 0.4rem; font-size: 0.85rem; color: var(--muted); display: flex; gap: 0.4rem; align-items: center; }
+.merge-panes .pane-draft { background: #f6f9ff; border-color: var(--accent); }
+.tag { font-size: 0.75rem; padding: 0.1rem 0.45rem; border-radius: 999px; background: #eef1f5; color: var(--muted); }
+.tag.warn { background: #fff3bf; color: #7a5b00; }
+.tag.bucket-amended { background: #ffe8cc; color: #8a4b00; }
+.tag.bucket-new_or_abrogated { background: #ffe3e3; color: #a12727; }
+.tag.bucket-unchanged_in_substance { background: #e6fcf5; color: #0b7285; }
+.worddiff { line-height: 1.8; }
+.span-insert { background: #d3f9d8; }
+.span-delete { background: #ffe3e3; text-decoration: line-through; }
+.merge-approval { margin-top: 2rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+.merge-approval textarea { width: 100%; min-height: 4rem; font: inherit; padding: 0.5rem; border: 1px solid var(--line); border-radius: 4px; }
+.merge-approval .actions { display: flex; gap: 0.75rem; margin-top: 0.75rem; }
+@media (max-width: 60rem) { .merge-panes { grid-template-columns: 1fr; } }
+
+/* Chat (M6). The answer is the small part; the evidence under it is the point. */
+.chat__log { display: grid; gap: 1.5rem; margin: 1.5rem 0; }
+.chat__exchange { border-bottom: 1px solid var(--line); padding-bottom: 1rem; }
+.chat__question { font-weight: 600; }
+.chat__answer { border-left: 3px solid var(--accent); padding-left: 0.9rem; }
+.chat__answer--refused { border-left-color: var(--muted); color: var(--muted); }
+.chat__text { line-height: 1.7; }
+.citation-marker {
+  background: none; border: 0; padding: 0 0.15rem; font: inherit;
+  color: var(--accent); cursor: pointer; vertical-align: baseline;
+}
+.chat__citations { margin: 0.75rem 0 0; padding-left: 1.2rem; display: grid; gap: 0.6rem; }
+.chat__citations li { padding: 0.3rem 0.4rem; border-radius: 4px; }
+.chat__citations li.is-highlighted { background: #fff3bf; }
+.chat__citations blockquote {
+  margin: 0.3rem 0 0; padding-left: 0.7rem; border-left: 2px solid var(--line);
+  color: var(--muted); font-size: 0.9rem;
+}
+.chat__meta { margin-top: 0.6rem; color: var(--muted); font-size: 0.8rem; }
+.chat__form { display: grid; grid-template-columns: 1fr auto; gap: 0.75rem; align-items: start; }
+.chat__facet { grid-column: 1 / -1; display: flex; gap: 0.5rem; align-items: center; color: var(--muted); font-size: 0.9rem; }
+.chat__facet select { padding: 0.35rem; border: 1px solid var(--line); border-radius: 4px; font: inherit; }
+
+/* Document inspection (ADR-0026). The graph is drawn one document at a time: this document in
+   the middle, incoming edges left, outgoing right, grouped by type. No simulation — the layout
+   is computed, so the same document draws the same picture for every reviewer. */
+.inspect__header h1 { margin-bottom: 0.25rem; }
+.inspect__meta { color: var(--muted); margin: 0; }
+.inspect__block { margin-top: 2rem; border-top: 1px solid var(--line); padding-top: 1rem; }
+.inspect__block h2 { font-size: 1.1rem; }
+.inspect__warnings { list-style: none; padding: 0.75rem 1rem; margin-top: 1rem; display: grid; gap: 0.35rem; border: 1px solid var(--warn); border-radius: 6px; background: #fffaf0; }
+.notice { padding: 0.5rem 0.75rem; border-left: 3px solid var(--accent); background: #f2f6ff; }
+
+.egomap { width: 100%; height: auto; margin: 0.5rem 0 1rem; }
+.egomap__self { fill: #f2f6ff; stroke: var(--accent); }
+.egomap__self-label { font-size: 13px; fill: var(--fg); }
+.egomap__type { font-size: 12px; font-weight: 600; fill: var(--fg); }
+.egomap__count { font-size: 11px; fill: var(--muted); }
+.egomap__axis { font-size: 11px; fill: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.egomap__link { stroke: var(--line); stroke-width: 1.5; }
+/* Dashed until a person has confirmed it: the whole point of the screen is telling machine
+   output from human judgement, so the picture must not flatten the two. */
+.egomap__link--unconfirmed { stroke: var(--warn); stroke-width: 1.5; stroke-dasharray: 4 3; fill: none; }
+
+.inspect__edges { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+@media (max-width: 60rem) { .inspect__edges { grid-template-columns: 1fr; } }
+.edges h3 { font-size: 0.95rem; color: var(--muted); margin-bottom: 0.5rem; }
+.edges__group h4 { font-size: 0.9rem; margin: 0.75rem 0 0.35rem; }
+.edges__list { list-style: none; padding: 0; display: grid; gap: 0.5rem; }
+.edge { padding: 0.6rem; border: 1px solid var(--line); border-radius: 6px; }
+.edge__title { font-weight: 500; }
+.edge__number { color: var(--muted); font-weight: 400; }
+.edge__meta { color: var(--muted); font-size: 0.85rem; margin-top: 0.2rem; }
+.edge__confirmed { color: var(--fg); }
+.edge__detected { color: var(--warn); }
+.edge__actions { display: flex; gap: 0.75rem; margin-top: 0.3rem; }
+.link--danger { color: var(--error); }
+
+.lineage { list-style: none; padding: 0; display: grid; gap: 0.5rem; }
+.lineage__item { display: grid; grid-template-columns: 8rem 1fr auto; gap: 0.75rem; align-items: baseline; padding: 0.5rem; border-left: 3px solid var(--line); }
+.lineage__date { color: var(--muted); font-variant-numeric: tabular-nums; }
+.lineage__ok { color: var(--muted); }
+
+.inspect__chunks-header { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+.inspect__chunks-header h2 { margin-right: auto; }
+.inspect__chunks-header .checkbox { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; color: var(--muted); }
+.chunks { list-style: none; padding: 0; display: grid; gap: 0.75rem; margin-top: 1rem; }
+.chunk { padding: 0.6rem; border: 1px solid var(--line); border-radius: 6px; }
+.chunk--tombstoned { opacity: 0.55; border-style: dashed; }
+.chunk__meta { color: var(--muted); font-size: 0.8rem; }
+.chunk__text { margin: 0.35rem 0 0; white-space: pre-wrap; }
+
+/* References waiting for their target to be ingested (ADR-0028). Deliberately styled as a
+   backlog rather than an error: a reference to an instrument the bank has not digitised yet
+   is a fact about the corpus, not a fault in the document. */
+.pending { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px dashed var(--line); }
+.pending h3 { font-size: 0.95rem; color: var(--muted); margin-bottom: 0.35rem; }
+.pending__list { list-style: none; padding: 0; display: grid; gap: 0.35rem; margin-top: 0.6rem; }
+.pending__list li { display: flex; gap: 0.75rem; align-items: baseline; flex-wrap: wrap; }
+.pending__number { font-weight: 500; font-variant-numeric: tabular-nums; }

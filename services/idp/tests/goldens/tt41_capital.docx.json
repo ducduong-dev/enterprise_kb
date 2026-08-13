@@ -1,0 +1,41 @@
+{
+  "block_count": 15,
+  "block_types": {
+    "heading": 10,
+    "paragraph": 4,
+    "table": 1
+  },
+  "detected_refs": [
+    [
+      "88/2019/NĐ-CP",
+      "cites"
+    ]
+  ],
+  "doc_meta": {
+    "detected_title": "Thông tư 41/2016/TT-NHNN",
+    "language": "vi",
+    "legal_number": "41/2016/TT-NHNN",
+    "page_count": 1,
+    "source_format": "docx"
+  },
+  "section_paths": [
+    "Chương I",
+    "Chương II",
+    "Chương II > Điều 12",
+    "Chương II > Điều 12 > Khoản 1",
+    "Chương II > Điều 12 > Khoản 2",
+    "Chương II > Điều 12 > Khoản 2 > Điểm a",
+    "Chương II > Điều 6",
+    "Chương II > Điều 6 > Khoản 1",
+    "Chương II > Điều 6 > Khoản 2"
+  ],
+  "tables": [
+    {
+      "cols": 3,
+      "rows": 3
+    }
+  ],
+  "text_chars": 824,
+  "text_sha256": "cdfe209df6bbd2c1eb03efd82c59f0aecf96be66c211b5c44af98418c20e4bc2",
+  "warnings": []
+}

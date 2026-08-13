@@ -1,0 +1,25 @@
+{
+  "block_count": 2,
+  "block_types": {
+    "heading": 1,
+    "table": 1
+  },
+  "detected_refs": [],
+  "doc_meta": {
+    "detected_title": "Tỷ lệ an toàn vốn quý IV",
+    "language": "vi",
+    "legal_number": null,
+    "page_count": 1,
+    "source_format": "pptx"
+  },
+  "section_paths": [],
+  "tables": [
+    {
+      "cols": 3,
+      "rows": 3
+    }
+  ],
+  "text_chars": 109,
+  "text_sha256": "6e4592fef703d6cd56ce5503c9d796908be61ac5afa38071dee024417a600ade",
+  "warnings": []
+}

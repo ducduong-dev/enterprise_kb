@@ -1,0 +1,20 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: kb-services
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - registry:8000
+          - idp:8000
+          - pii-gate:8000
+          - identity-merge:8000
+          - indexer:8000
+          - retrieval-api:8000
+          - chat-api:8000
+          - portal-api:8000

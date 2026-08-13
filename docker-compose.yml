@@ -1,0 +1,439 @@
+# On-premises stack. `make dev` brings up infrastructure; `make dev-all` adds the services.
+#
+# Profiles:
+#   (default)  infrastructure only — postgres, minio, temporal, keycloak
+#   services   the Python services and the portal
+#   observability  prometheus, grafana, loki
+#   gpu        vLLM model servers (require an NVIDIA runtime; skipped on laptops)
+#   dmz        the external-facing profile (M8) — no path to internal indexes
+#
+# Nothing here is production-hardened credentials-wise; prod overrides live in
+# ops/compose/ and read from the secret store.
+
+name: kb-platform
+
+x-service-base: &service-base
+  build:
+    context: .
+    dockerfile: ops/docker/Dockerfile.service
+  env_file: .env
+  environment: &service-env
+    # These override `.env`, whose values are written for tooling run on the host. Inside a
+    # container `localhost:4000` is the container itself — the model call fails, and it fails
+    # at the first document rather than at start-up.
+    KB_DB_HOST: postgres
+    KB_S3_ENDPOINT: http://minio:9000
+    # The issuer is an *identifier*: it is whatever Keycloak stamped into `iss`, which is the
+    # URL the browser signed in at. The two URLs below are where this container *reaches* the
+    # same Keycloak, which is a different question and, inside compose, a different name.
+    # Without the split, either the browser cannot resolve the issuer or the service cannot
+    # fetch the keys — and both look like "login does nothing".
+    KB_OIDC_ISSUER: ${KB_PUBLIC_ORIGIN:-http://localhost:5173}/realms/kb
+    KB_OIDC_JWKS_URL: http://keycloak:8080/realms/kb/protocol/openid-connect/certs
+    KB_OIDC_TOKEN_ENDPOINT: http://keycloak:8080/realms/kb/protocol/openid-connect/token
+    KB_TEMPORAL_HOST: temporal:7233
+    KB_MODEL_PROXY_URL: http://litellm:4000
+    KB_RETRIEVAL_URL: http://retrieval-api:8000
+  depends_on:
+    postgres:
+      condition: service_healthy
+  restart: unless-stopped
+  profiles: [services]
+
+services:
+  postgres:
+    # ParadeDB = Postgres 16 + pgvector + pg_search. One image because one engine serves the
+    # registry, the vector index and the keyword index (ADR-0021): the tests exercise the
+    # backend production runs, rather than a stand-in for it.
+    #
+    # Pinned, and not to `latest`: `latest` now carries Postgres 18, whose image stores data
+    # one directory up and refuses to start against this volume. A database engine is not a
+    # thing to upgrade by pulling — the tag is the version this schema is migrated and
+    # measured against.
+    image: paradedb/paradedb:0.25.2-pg16
+    environment:
+      POSTGRES_USER: ${KB_DB_USER:-kb}
+      POSTGRES_PASSWORD: ${KB_DB_PASSWORD:-kb}
+      POSTGRES_DB: ${KB_DB_NAME:-kb}
+      # Temporal and Keycloak get their own databases in the same instance for dev; in
+      # production they are separate clusters.
+      POSTGRES_MULTIPLE_DATABASES: temporal,temporal_visibility,keycloak,litellm
+    ports: ["5432:5432"]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./ops/postgres/init:/docker-entrypoint-initdb.d:ro
+    # Reachable from the DMZ segment, as the only thing that is. The role it accepts from
+    # there sees published external rows and nothing else.
+    networks: [default, dmz-data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KB_DB_USER:-kb} -d ${KB_DB_NAME:-kb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  minio:
+    image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${KB_S3_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${KB_S3_SECRET_KEY:-minioadmin}
+    ports: ["9000:9000", "9001:9001"]
+    volumes: [minio-data:/data]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set kb http://minio:9000 ${KB_S3_ACCESS_KEY:-minioadmin} ${KB_S3_SECRET_KEY:-minioadmin} &&
+      mc mb --ignore-existing kb/kb-originals kb/kb-derived &&
+      mc version enable kb/kb-originals &&
+      mc anonymous set none kb/kb-originals &&
+      mc anonymous set none kb/kb-derived
+      "
+    restart: "no"
+
+  temporal:
+    image: temporalio/auto-setup:1.26.2
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: ${KB_DB_USER:-kb}
+      POSTGRES_PWD: ${KB_DB_PASSWORD:-kb}
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["7233:7233"]
+    volumes:
+      - ./ops/temporal:/etc/temporal/config/dynamicconfig:ro
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:5173
+    depends_on: [temporal]
+    ports: ["8088:8080"]
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.1
+    command: start-dev --import-realm
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_ADMIN:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-admin}
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/keycloak
+      KC_DB_USERNAME: ${KB_DB_USER:-kb}
+      KC_DB_PASSWORD: ${KB_DB_PASSWORD:-kb}
+      KC_HEALTH_ENABLED: "true"
+      # Token exchange powers the internal bot's on-behalf-of retrieval (INV-3).
+      KC_FEATURES: token-exchange,admin-fine-grained-authz
+      # Pinned so `iss` does not vary with the URL a caller happened to use — Keycloak would
+      # otherwise stamp whatever Host header it saw, and a token minted through one route
+      # would fail verification on another. This is the browser's address (the portal's own
+      # origin, which proxies /realms through to here); the services reach the same server at
+      # `keycloak:8080` via KB_OIDC_JWKS_URL / KB_OIDC_TOKEN_ENDPOINT. Browsing from another
+      # machine? Set KB_PUBLIC_ORIGIN in .env and rebuild the portal.
+      KC_PROXY_HEADERS: xforwarded
+      KC_HOSTNAME: ${KB_PUBLIC_ORIGIN:-http://localhost:5173}
+      KC_HOSTNAME_STRICT: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports: ["8080:8080"]
+    volumes:
+      - ./ops/keycloak-realm:/opt/keycloak/data/import:ro
+
+  # ------------------------------------------------------------------ platform services
+
+  registry:
+    <<: *service-base
+    command: uvicorn kb_registry.main:app --host 0.0.0.0 --port 8000
+    ports: ["8001:8000"]
+
+  idp:
+    <<: *service-base
+    command: uvicorn kb_idp.main:app --host 0.0.0.0 --port 8000
+    ports: ["8002:8000"]
+
+  pii-gate:
+    <<: *service-base
+    command: uvicorn kb_pii_gate.main:app --host 0.0.0.0 --port 8000
+    ports: ["8003:8000"]
+
+  identity-merge:
+    <<: *service-base
+    command: uvicorn kb_identity_merge.main:app --host 0.0.0.0 --port 8000
+    ports: ["8004:8000"]
+
+  indexer:
+    <<: *service-base
+    command: uvicorn kb_indexer.main:app --host 0.0.0.0 --port 8000
+    ports: ["8005:8000"]
+
+  # The indexer's real job: poll the outbox and mirror canonical chunks into the keyword
+  # index. Separate from the HTTP surface so a restart of one does not interrupt the other.
+  indexer-consumer:
+    <<: *service-base
+    command: python -c "from kb_indexer.main import run_consumer; run_consumer()"
+    # No HTTP surface, so the image's `curl /healthz` check can only ever fail. A permanently
+    # unhealthy container is worse than none: it trains everyone to ignore the column.
+    healthcheck:
+      disable: true
+
+  retrieval-api:
+    <<: *service-base
+    command: uvicorn kb_retrieval_api.main:app --host 0.0.0.0 --port 8000
+    ports: ["8006:8000"]
+
+  chat-api:
+    <<: *service-base
+    command: uvicorn kb_chat_api.main:app --host 0.0.0.0 --port 8000
+    ports: ["8007:8000"]
+
+  portal-api:
+    <<: *service-base
+    command: uvicorn kb_portal_api.main:app --host 0.0.0.0 --port 8000
+    ports: ["8008:8000"]
+    environment:
+      <<: *service-env
+      # The only service a browser talks to directly. The portal is served from its own origin,
+      # so every call to this one is cross-origin and dies at the preflight without this.
+      KB_CORS_ORIGINS: '["http://localhost:5173","http://localhost:3000"]'
+
+  workflows:
+    <<: *service-base
+    command: python -c "from kb_workflows.worker import main; main()"
+    # A Temporal worker, not a server: same reason as indexer-consumer above.
+    healthcheck:
+      disable: true
+
+  portal:
+    build:
+      context: ./frontend/portal
+      dockerfile: Dockerfile
+      # Vite inlines these at build time. Setting them as runtime environment did nothing:
+      # the bundle was already built against the defaults.
+      args:
+        # Relative on purpose: same-origin through this nginx, so the bundle carries no
+        # hostname and works wherever it is served from.
+        VITE_API_BASE: ${VITE_API_BASE:-/api}
+        VITE_OIDC_ISSUER: ${VITE_OIDC_ISSUER:-/realms/kb}
+    ports: ["5173:80"]
+    depends_on: [portal-api, keycloak]
+    profiles: [services]
+
+  # ----------------------------------------------------------------------- model serving
+  #
+  # Everything model-shaped goes through the proxy (ADR-0024): the services know four roles,
+  # `ops/litellm/config.yaml` knows which provider serves each. It is also the only place a
+  # provider credential lives, and the only place model spend can be seen.
+
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-kb-dev}
+      LITELLM_DATABASE_URL: postgresql://${KB_DB_USER:-kb}:${KB_DB_PASSWORD:-kb}@postgres:5432/litellm
+      # Only read when a public route is uncommented in the config; absent otherwise.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    volumes:
+      - ./ops/litellm/config.yaml:/app/config.yaml:ro
+    ports: ["4000:4000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # The DMZ reaches the proxy over `dmz-models` and nothing else on the platform network.
+    # A public answer still needs a model; a public process still must not see the portal.
+    networks: [default, dmz-models]
+    healthcheck:
+      # The image has no curl.
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request;urllib.request.urlopen('http://localhost:4000/health/liveliness')"
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    profiles: [models]
+
+  # The weights a server loads (`VLLM_*`, `TEI_*`) are not the alias the platform asks the
+  # proxy for (`KB_MODEL_*_MODEL`). Keeping them separate is what lets `kb-generation` point at
+  # a different model tomorrow without every service changing.
+  vllm-generation:
+    image: vllm/vllm-openai:v0.8.5
+    command: >
+      --model ${VLLM_GENERATION_MODEL:-Qwen/Qwen2.5-32B-Instruct}
+      --served-model-name kb-generation --max-model-len 32768
+    volumes: [hf-cache:/root/.cache/huggingface]
+    ports: ["8084:8000"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+    profiles: [gpu]
+
+  vllm-vlm:
+    image: vllm/vllm-openai:v0.8.5
+    command: >
+      --model ${VLLM_VLM_MODEL:-Qwen/Qwen2.5-VL-7B-Instruct}
+      --served-model-name kb-vlm --max-model-len 16384
+    volumes: [hf-cache:/root/.cache/huggingface]
+    ports: ["8083:8000"]
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+    profiles: [gpu]
+
+  embeddings:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.7
+    command: --model-id ${TEI_EMBEDDING_MODEL:-BAAI/bge-m3} --pooling cls
+    volumes: [hf-cache:/data]
+    ports: ["8081:80"]
+    profiles: [gpu]
+
+  reranker:
+    image: ghcr.io/huggingface/text-embeddings-inference:1.7
+    command: --model-id ${TEI_RERANK_MODEL:-BAAI/bge-reranker-v2-m3}
+    volumes: [hf-cache:/data]
+    ports: ["8082:80"]
+    profiles: [gpu]
+
+  # ------------------------------------------------------------------------ observability
+
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    volumes:
+      - ./ops/prometheus:/etc/prometheus:ro
+      - prometheus-data:/prometheus
+    ports: ["9090:9090"]
+    profiles: [observability]
+
+  loki:
+    image: grafana/loki:3.4.2
+    command: -config.file=/etc/loki/loki.yaml
+    volumes:
+      - ./ops/loki:/etc/loki:ro
+      - loki-data:/loki
+    ports: ["3100:3100"]
+    profiles: [observability]
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./ops/grafana-dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports: ["3000:3000"]
+    depends_on: [prometheus, loki]
+    profiles: [observability]
+
+  # ---------------------------------------------------------------------------- DMZ (M8)
+  #
+  # The public surface, in its own network with no route to the portal, Temporal, MinIO or
+  # the internal chat. Three properties, each enforced by something other than good intentions:
+  #
+  #   * the gateway routes exactly one path (`ops/dmz/nginx.conf`);
+  #   * the services sit on `dmz` and `dmz-data`; `dmz-data` reaches Postgres and nothing else,
+  #     so "no path to internal indexes" is a network fact rather than a configuration promise;
+  #   * they connect as `kb_external`, a SELECT-only role whose row-level security shows it
+  #     published external rows only (`ops/dmz/external-role.sql`) — INV-4 held twice.
+  #
+  #   make dmz     # bring it up alongside the platform
+  #   make dmz-check  # prove the isolation rather than assume it
+
+  dmz-gateway:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./ops/dmz/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports: ["8443:8080"]
+    depends_on: [dmz-chat-api]
+    networks: [dmz]
+    restart: unless-stopped
+    profiles: [dmz]
+
+  dmz-chat-api:
+    build:
+      context: .
+      dockerfile: ops/docker/Dockerfile.service
+    env_file: .env
+    command: uvicorn kb_chat_api.main:app --host 0.0.0.0 --port 8000
+    environment:
+      KB_DB_HOST: postgres
+      KB_DB_USER: kb_external
+      KB_DB_PASSWORD: ${KB_DMZ_DB_PASSWORD:-dmz-dev-password}
+      # The public surface's issuer is its own gateway's, not the internal portal's.
+      KB_OIDC_ISSUER: ${KB_DMZ_OIDC_ISSUER:-${KB_PUBLIC_ORIGIN:-http://localhost:5173}/realms/kb}
+      KB_OIDC_JWKS_URL: http://keycloak:8080/realms/kb/protocol/openid-connect/certs
+      KB_RETRIEVAL_URL: http://dmz-retrieval-api:8000
+      KB_MODEL_PROXY_URL: http://litellm:4000
+      # Binds the *process* to the public surface: this container refuses `/v1/chat/internal`
+      # whoever reaches it and however they got there (INV-4).
+      KB_SURFACE: dmz
+      # No S3, no Temporal, no model gateway beyond generation: nothing else is reachable
+      # from this network, and the service is written to need nothing else.
+      KB_SERVICE_NAME: kb-chat-api-dmz
+    networks: [dmz, dmz-data, dmz-models]
+    restart: unless-stopped
+    profiles: [dmz]
+
+  dmz-retrieval-api:
+    build:
+      context: .
+      dockerfile: ops/docker/Dockerfile.service
+    env_file: .env
+    command: uvicorn kb_retrieval_api.main:app --host 0.0.0.0 --port 8000
+    environment:
+      KB_DB_HOST: postgres
+      KB_DB_USER: kb_external
+      KB_DB_PASSWORD: ${KB_DMZ_DB_PASSWORD:-dmz-dev-password}
+      # The public surface's issuer is its own gateway's, not the internal portal's.
+      KB_OIDC_ISSUER: ${KB_DMZ_OIDC_ISSUER:-${KB_PUBLIC_ORIGIN:-http://localhost:5173}/realms/kb}
+      KB_OIDC_JWKS_URL: http://keycloak:8080/realms/kb/protocol/openid-connect/certs
+      KB_SERVICE_NAME: kb-retrieval-api-dmz
+      KB_MODEL_PROXY_URL: http://litellm:4000
+      KB_SURFACE: dmz
+    networks: [dmz, dmz-data, dmz-models]
+    restart: unless-stopped
+    profiles: [dmz]
+
+volumes:
+  postgres-data:
+  minio-data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  hf-cache:
+
+networks:
+  # The default network every platform service shares.
+  default:
+    name: kb-platform
+  # The DMZ's own segment: the gateway and the two public services talk here, and nothing
+  # else joins it.
+  dmz:
+    name: kb-dmz
+  # The one bridge out of the DMZ. Postgres joins it so the public services can read; the
+  # portal, Temporal, MinIO, the indexer and the internal chat do not.
+  dmz-data:
+    name: kb-dmz-data
+  # The second bridge, and the only other one: the model proxy. A public answer needs a model,
+  # and routing that call through the same proxy is what keeps one place deciding where model
+  # traffic goes (ADR-0024).
+  dmz-models:
+    name: kb-dmz-models

@@ -1,0 +1,25 @@
+{
+  "block_count": 6,
+  "block_types": {
+    "heading": 2,
+    "paragraph": 4
+  },
+  "detected_refs": [
+    [
+      "QT-2024-007",
+      "cites"
+    ]
+  ],
+  "doc_meta": {
+    "detected_title": "Đào tạo: Nhận biết khách hàng (KYC)",
+    "language": "vi",
+    "legal_number": null,
+    "page_count": 2,
+    "source_format": "pptx"
+  },
+  "section_paths": [],
+  "tables": [],
+  "text_chars": 268,
+  "text_sha256": "ce67012cbc84dd771d9589c7841ad02f04a4bc3216318b1e126e4ec32f3f4049",
+  "warnings": []
+}

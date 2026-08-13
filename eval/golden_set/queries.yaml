@@ -1,0 +1,112 @@
+# Golden set — human-graded query/relevance fixtures.
+#
+# Grades: 3 = answers the question directly, 2 = relevant supporting context,
+#         1 = related but not sufficient, 0 = irrelevant.
+#
+# `principal` names a fixture from kb_authz.fixtures; the harness retrieves as that principal,
+# so a query graded for a compliance officer measures nothing about what a teller may see.
+# `forbidden` lists documents that must never appear for that principal — the canaries are on
+# every entry, which is what turns the quality set into an ACL sweep at the same time.
+#
+# Grows with real production queries (M2 onwards). Nightly regression against this set blocks
+# merges to main.
+
+- id: q001
+  query: "Tỷ lệ an toàn vốn tối thiểu theo Thông tư 41 là bao nhiêu?"
+  lang: vi
+  principal: user_retail_staff
+  relevant:
+    - { doc: tt41-capital, section: "Chương II > Điều 6 > Khoản 1", grade: 3 }
+    - { doc: policy-capital-internal, section: "Phần 2 > Mục 3", grade: 2 }
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: q002
+  query: "What is the minimum capital adequacy ratio?"
+  lang: en
+  principal: user_retail_staff
+  relevant:
+    - { doc: tt41-capital, section: "Chương II > Điều 6 > Khoản 1", grade: 3 }
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: q003
+  query: "Hệ số rủi ro tín dụng được xác định thế nào?"
+  lang: vi
+  principal: user_it_engineer
+  relevant:
+    - { doc: tt41-capital, section: "Chương II > Điều 12 > Khoản 2", grade: 3 }
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: q004
+  query: "Quy trình nhận biết khách hàng khi mở tài khoản"
+  lang: vi
+  principal: user_compliance_officer
+  relevant:
+    - { doc: aml-procedure, section: "Bước 3", grade: 3 }
+  forbidden: [canary-1, canary-2, canary-3]
+
+# Same query, a principal without the compliance group: the procedure is restricted, so the
+# correct result set is empty. A retrieval regression that "helpfully" returns it is an
+# INV-2 violation, not a relevance miss.
+- id: q005
+  query: "Quy trình nhận biết khách hàng khi mở tài khoản"
+  lang: vi
+  principal: user_it_engineer
+  relevant: []
+  forbidden: [aml-procedure, canary-1, canary-2, canary-3]
+
+- id: q006
+  query: "Phí duy trì tài khoản thanh toán cá nhân"
+  lang: vi
+  principal: external_bot
+  relevant:
+    - { doc: retail-fees, section: "Phí tài khoản", grade: 3 }
+  forbidden: [tt41-capital, policy-capital-internal, aml-procedure, branch-ops,
+              canary-1, canary-2, canary-3]
+
+- id: q007
+  query: "Account maintenance fee for personal accounts"
+  lang: en
+  principal: external_bot
+  relevant:
+    - { doc: retail-fees, section: "Phí tài khoản", grade: 3 }
+  forbidden: [tt41-capital, policy-capital-internal, aml-procedure, branch-ops,
+              canary-1, canary-2, canary-3]
+
+- id: q008
+  query: "Kiểm quỹ cuối ngày tại quầy giao dịch"
+  lang: vi
+  principal: user_branch_teller
+  relevant:
+    - { doc: branch-ops, section: "Mục 4", grade: 3 }
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: q009
+  query: "Kiểm quỹ cuối ngày tại quầy giao dịch"
+  lang: vi
+  principal: user_legal_counsel
+  relevant: []
+  forbidden: [branch-ops, canary-1, canary-2, canary-3]
+
+- id: q010
+  query: "Đệm vốn nội bộ cao hơn mức tối thiểu bao nhiêu?"
+  lang: vi
+  principal: user_operations_steward
+  relevant:
+    - { doc: policy-capital-internal, section: "Phần 2 > Mục 3", grade: 3 }
+    - { doc: tt41-capital, section: "Chương II > Điều 6 > Khoản 1", grade: 2 }
+  forbidden: [canary-1, canary-2, canary-3]
+
+# Direct probes for the canaries. Every principal must return nothing.
+- id: q011
+  query: "CANARY-ALPHA-7F3D kế hoạch sáp nhập"
+  lang: vi
+  principal: user_admin
+  relevant: []
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: q012
+  query: "board-only merger plan"
+  lang: en
+  principal: internal_bot_obo_retail
+  relevant: []
+  forbidden: [canary-1, canary-2, canary-3]

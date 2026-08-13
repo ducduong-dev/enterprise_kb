@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  UV_VERSION: "0.6.14"
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  static:
+    name: lint · types · invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv sync --all-packages --frozen
+      - name: ruff
+        run: |
+          uv run ruff check --output-format=github .
+          uv run ruff format --check .
+      - name: mypy
+        run: uv run mypy libs services scripts
+      # INV-1 / INV-12 are architecture, not style: blocking.
+      - name: architectural invariants
+        run: uv run python scripts/check_invariants.py
+      - name: golden set is well-formed
+        run: uv run python eval/harness/run.py --dry-run
+
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # ParadeDB: Postgres + pgvector + pg_search, so CI exercises the keyword engine
+        # production runs rather than a stand-in for it (ADR-0021).
+        image: paradedb/paradedb:latest
+        env:
+          POSTGRES_USER: kb
+          POSTGRES_PASSWORD: kb
+          POSTGRES_DB: kb
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U kb"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    env:
+      KB_ENV: test
+      # CI has no GPU, so the deterministic embedding/rerank adapters keep the retrieval
+      # funnel exercised (ADR-0010) and the recorded OCR/VLM adapters do the same for the
+      # scanned route (ADR-0011); both declare themselves non-production in their `info`.
+      # The keyword engine, by contrast, is the real one.
+      KB_KEYWORD_BACKEND: pg_search
+      KB_DB_HOST: localhost
+      KB_DB_USER: kb
+      KB_DB_PASSWORD: kb
+      KB_DB_NAME: kb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - run: uv python install ${{ env.PYTHON_VERSION }}
+      - run: uv sync --all-packages --frozen
+      - name: migrations apply and roll back
+        run: |
+          uv run alembic upgrade head
+          uv run alembic downgrade base
+          uv run alembic upgrade head
+      - name: schema drift
+        run: uv run alembic check
+      # Not a migration: the BM25 index and its folded columns belong to the engine choice,
+      # so they install per deployment (ADR-0021).
+      - name: keyword engine install
+        run: PGPASSWORD=kb psql -h localhost -U kb -d kb -f ops/pg_search/install.sql
+      - name: unit + integration tests
+        run: uv run pytest --cov=libs --cov-report=term-missing
+      # The ACL sweep is the blocking gate: one violation fails the build (INV-2/3/4/10).
+      - name: ACL sweep
+        run: uv run pytest -m acl_sweep -v
+      - name: retrieval quality gate
+        run: |
+          uv run python scripts/seed.py
+          uv run python eval/harness/run.py
+      # Both halves of the PII criterion: nothing dirty publishes, nothing clean is blocked.
+      - name: PII red-team corpus
+        run: uv run pytest services/pii-gate/tests/test_detector.py -q
+      # Answer faithfulness and the chat red team. Disclosure is blocking; questions the
+      # deterministic adapters cannot exercise are reported, not scored.
+      - name: Chat answer eval
+        run: uv run python eval/harness/answers.py
+      # The public surface, under pressure. Disclosure and conduct both fail the build.
+      - name: External conduct red team
+        run: uv run python eval/harness/external.py
+
+  frontend:
+    name: portal
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend/portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/portal/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build

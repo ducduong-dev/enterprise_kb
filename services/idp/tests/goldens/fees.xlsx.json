@@ -1,0 +1,25 @@
+{
+  "block_count": 2,
+  "block_types": {
+    "heading": 1,
+    "table": 1
+  },
+  "detected_refs": [],
+  "doc_meta": {
+    "detected_title": "Biểu phí cá nhân",
+    "language": "vi",
+    "legal_number": null,
+    "page_count": 1,
+    "source_format": "xlsx"
+  },
+  "section_paths": [],
+  "tables": [
+    {
+      "cols": 3,
+      "rows": 5
+    }
+  ],
+  "text_chars": 260,
+  "text_sha256": "b4979cc36335c343bfd03fc1e9de3c01ca61252fc67ce80dbddae76610bd6514",
+  "warnings": []
+}

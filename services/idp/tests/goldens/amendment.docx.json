@@ -1,0 +1,35 @@
+{
+  "block_count": 8,
+  "block_types": {
+    "heading": 6,
+    "paragraph": 2
+  },
+  "detected_refs": [
+    [
+      "1627/2001/QĐ-NHNN",
+      "abrogates"
+    ],
+    [
+      "41/2016/TT-NHNN",
+      "amends"
+    ]
+  ],
+  "doc_meta": {
+    "detected_title": "THÔNG TƯ",
+    "language": "vi",
+    "legal_number": "22/2023/TT-NHNN",
+    "page_count": 1,
+    "source_format": "docx"
+  },
+  "section_paths": [
+    "Điều 1",
+    "Điều 1 > Khoản 1",
+    "Điều 2",
+    "Điều 2 > Khoản 1",
+    "Điều 2 > Khoản 2"
+  ],
+  "tables": [],
+  "text_chars": 436,
+  "text_sha256": "44918ba2274c2e3ebbfc2e662f6b5001ef46e3ca494164630a6a96ddc8ce21f3",
+  "warnings": []
+}

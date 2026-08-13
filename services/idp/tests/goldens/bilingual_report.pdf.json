@@ -1,0 +1,28 @@
+{
+  "block_count": 8,
+  "block_types": {
+    "heading": 3,
+    "paragraph": 5
+  },
+  "detected_refs": [
+    [
+      "41/2016/TT-NHNN",
+      "cites"
+    ]
+  ],
+  "doc_meta": {
+    "detected_title": "Internal Capital Adequacy Assessment",
+    "language": "mixed",
+    "legal_number": null,
+    "page_count": 1,
+    "source_format": "pdf_native"
+  },
+  "section_paths": [
+    "Article 1",
+    "Article 2"
+  ],
+  "tables": [],
+  "text_chars": 342,
+  "text_sha256": "dda091fb7407d73202120f241e89784cca5a9c3af1f0b5f5d1388dfd9ac7e8b6",
+  "warnings": []
+}

@@ -1,0 +1,26 @@
+{
+  "block_count": 4,
+  "block_types": {
+    "heading": 2,
+    "paragraph": 1,
+    "table": 1
+  },
+  "detected_refs": [],
+  "doc_meta": {
+    "detected_title": "Câu hỏi thường gặp về tài khoản thanh toán",
+    "language": "vi",
+    "legal_number": null,
+    "page_count": 1,
+    "source_format": "html"
+  },
+  "section_paths": [],
+  "tables": [
+    {
+      "cols": 2,
+      "rows": 3
+    }
+  ],
+  "text_chars": 206,
+  "text_sha256": "ad87424153c6ce5973f688f06cea7f221a80bbdcc274932e9c961d05e1622284",
+  "warnings": []
+}

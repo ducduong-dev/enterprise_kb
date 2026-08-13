@@ -1,0 +1,210 @@
+{
+ "bao_cao_thanh_khoan": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": null,
+  "notes": "",
+  "page_keys": [
+   "94b86eff3d6c3ac1be3a704516e1a300"
+  ],
+  "pages": 1
+ },
+ "bien_ban_hop_alco": {
+  "escalate_pages": [
+   1
+  ],
+  "language": "vi",
+  "legal_number": null,
+  "notes": "handwritten annotations",
+  "page_keys": [
+   "e8f9a5a0c528be7d4ba904124bb22902"
+  ],
+  "pages": 1
+ },
+ "bieu_phi_ca_nhan": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": null,
+  "notes": "",
+  "page_keys": [
+   "ada3e22a7438d392fa368aa4a970dfe6"
+  ],
+  "pages": 1
+ },
+ "chinh_sach_bao_mat": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": null,
+  "notes": "",
+  "page_keys": [
+   "272187a5c8cecce3f38e9e562914ce07"
+  ],
+  "pages": 1
+ },
+ "cong_van_ttgsnh": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": "1234/NHNN-TTGSNH",
+  "notes": "",
+  "page_keys": [
+   "e7f42c928d1a763242c04624821723b4"
+  ],
+  "pages": 1
+ },
+ "huong_dan_quay": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": null,
+  "notes": "",
+  "page_keys": [
+   "b31a1fd5f16d91a288d2eb1ea98dfe6e"
+  ],
+  "pages": 1
+ },
+ "huong_dan_song_ngu": {
+  "escalate_pages": [],
+  "language": "mixed",
+  "legal_number": null,
+  "notes": "",
+  "page_keys": [
+   "6e9bb8b868d12ba493e92c9e80d3fcf0"
+  ],
+  "pages": 1
+ },
+ "ke_hoach_kinh_doanh": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": null,
+  "notes": "",
+  "page_keys": [
+   "feadd708dee9a423608bfeda1c2ee353",
+   "df46069d6e3b3d4fe8c3d29b25a98779"
+  ],
+  "pages": 2
+ },
+ "mau_don_mo_tai_khoan": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": null,
+  "notes": "",
+  "page_keys": [
+   "af638b1f1ea7386860ed871c24ff6ed3"
+  ],
+  "pages": 1
+ },
+ "nd88_xu_phat": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": "88/2019/NĐ-CP",
+  "notes": "",
+  "page_keys": [
+   "a796b6f2d96092198a368016cf3ac2ca"
+  ],
+  "pages": 1
+ },
+ "qd_hdqt_chinh_sach_von": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": "114/2023/QĐ-HĐQT",
+  "notes": "",
+  "page_keys": [
+   "631da572d4fcd9769bab9ad52dd85d2a"
+  ],
+  "pages": 1
+ },
+ "qt_kyc_quy_trinh": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": "QT-2024-007",
+  "notes": "",
+  "page_keys": [
+   "301758ea520995333b861d3a204e5f1a"
+  ],
+  "pages": 1
+ },
+ "quy_che_tin_dung": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": "QC-2022-045",
+  "notes": "",
+  "page_keys": [
+   "6015ded28333ecb3fbb02f022e0fb485",
+   "d87207de2c8f6566fb760a551d7f7e05"
+  ],
+  "pages": 2
+ },
+ "quy_dinh_uy_quyen": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": null,
+  "notes": "",
+  "page_keys": [
+   "b2dab27b320cfb8fc75dd4eb11be3943"
+  ],
+  "pages": 1
+ },
+ "quyet_dinh_dau_moc": {
+  "escalate_pages": [
+   1
+  ],
+  "language": "vi",
+  "legal_number": "1627/2001/QĐ-NHNN",
+  "notes": "stamped and faded",
+  "page_keys": [
+   "3050372efdb5f496bb8f1302806b63bd"
+  ],
+  "pages": 1
+ },
+ "thong_bao_chi_nhanh": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": null,
+  "notes": "",
+  "page_keys": [
+   "174c20a000422c5e8ff6918bc93c95ea"
+  ],
+  "pages": 1
+ },
+ "thong_bao_lai_suat": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": null,
+  "notes": "",
+  "page_keys": [
+   "8a301cfc4b5d93133a117159596d51cb"
+  ],
+  "pages": 1
+ },
+ "tt02_co_cau_no_mo": {
+  "escalate_pages": [
+   1
+  ],
+  "language": "vi",
+  "legal_number": "02/2023/TT-NHNN",
+  "notes": "heavy photocopy degradation",
+  "page_keys": [
+   "b494d1856f0bec9011bded50bb3ef620"
+  ],
+  "pages": 1
+ },
+ "tt36_gioi_han": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": "36/2014/TT-NHNN",
+  "notes": "",
+  "page_keys": [
+   "19e4b3923fee5b451b93b24e9eff0bf2"
+  ],
+  "pages": 1
+ },
+ "tt41_an_toan_von": {
+  "escalate_pages": [],
+  "language": "vi",
+  "legal_number": "41/2016/TT-NHNN",
+  "notes": "",
+  "page_keys": [
+   "f5598c0b4e8f2c3e0850ff499704d9d7"
+  ],
+  "pages": 1
+ }
+}

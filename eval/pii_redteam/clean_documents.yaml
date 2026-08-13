@@ -1,0 +1,223 @@
+# Forty documents that must publish without a reviewer being asked (M4 acceptance criterion).
+#
+# These are not easy cases. They are the ones a careless gate blocks: regulatory text full of
+# instrument numbers, fee tables full of amounts, management reports full of long numbers,
+# procedures that name bank staff, and worked examples that are explicitly hypothetical.
+#
+# A gate that blocks these is worse than useless. Reviewers learn that the block means nothing,
+# start overriding on reflex, and the one document that mattered goes through with the rest.
+# Every entry here exists because some plausible rule would have caught it.
+
+- id: clean-001
+  note: instrument numbers look like account numbers
+  text: |
+    Căn cứ Thông tư 41/2016/TT-NHNN và Nghị định 88/2019/NĐ-CP, ngân hàng phải duy trì tỷ lệ
+    an toàn vốn tối thiểu là 8%.
+
+- id: clean-002
+  note: article and clause numbering
+  text: |
+    Điều 12. Tài sản có rủi ro tín dụng
+    1. Tài sản có rủi ro tín dụng được xác định theo phương pháp tiêu chuẩn.
+    2. Hệ số rủi ro của từng loại tài sản quy định tại Phụ lục 2.
+
+- id: clean-003
+  note: fee schedule — amounts everywhere, no person
+  text: |
+    Biểu phí dịch vụ: duy trì tài khoản thanh toán miễn phí; chuyển khoản liên ngân hàng
+    11.000 VND mỗi giao dịch; phát hành thẻ ghi nợ nội địa 50.000 VND.
+
+- id: clean-004
+  note: aggregate statistics with long numbers
+  text: |
+    Tổng số giao dịch trong quý IV đạt 12345678 giao dịch, tăng 14% so với cùng kỳ.
+
+- id: clean-005
+  note: system-wide balances
+  text: |
+    Tổng huy động vốn toàn hệ thống đạt 486.000.000.000.000 đồng tại thời điểm 31/12/2025.
+
+- id: clean-006
+  note: named bank officer performing a duty
+  text: |
+    Giám đốc chi nhánh Nguyễn Văn An phê duyệt các khoản vay đến 5 tỷ đồng theo phân quyền.
+
+- id: clean-007
+  note: explicitly hypothetical worked example
+  text: |
+    Ví dụ minh họa: giả sử khách hàng gửi 100.000.000 đồng kỳ hạn 12 tháng, lãi suất 5,4%/năm.
+
+- id: clean-008
+  note: procedure describing what to collect, without collecting it
+  text: |
+    Bước 2. Giao dịch viên đối chiếu thông tin trên căn cước công dân gắn chip với dữ liệu
+    quốc gia về dân cư trước khi mở tài khoản.
+
+- id: clean-009
+  note: internal decision number in the legacy format
+  text: |
+    Quyết định QD-2023-114 của Hội đồng quản trị ban hành Chính sách quản lý vốn nội bộ.
+
+- id: clean-010
+  note: interest rate table
+  text: |
+    Kỳ hạn | Lãi suất (%/năm)
+    Không kỳ hạn | 0,20
+    06 tháng | 4,60
+    12 tháng | 5,40
+
+- id: clean-011
+  note: risk limits by portfolio
+  text: |
+    Hạn mức danh mục bất động sản: 12.000 tỷ đồng. Ngưỡng cảnh báo: 80% hạn mức được duyệt.
+
+- id: clean-012
+  note: organisational contact, not a personal one
+  text: |
+    Mọi vướng mắc đề nghị liên hệ Khối Quản lý rủi ro qua hộp thư risk@bank.example.
+
+- id: clean-013
+  note: process document mentioning card numbers generically
+  text: |
+    Không được ghi số thẻ đầy đủ vào biên bản; chỉ ghi bốn chữ số cuối theo quy định.
+
+- id: clean-014
+  note: capital ratio reporting
+  text: |
+    Tỷ lệ an toàn vốn hợp nhất tại 31/12/2025 đạt 11,8%, cao hơn mức tối thiểu 8%.
+
+- id: clean-015
+  note: circular reference chain
+  text: |
+    Thông tư 36/2014/TT-NHNN được sửa đổi, bổ sung bởi Thông tư 22/2023/TT-NHNN.
+
+- id: clean-016
+  note: training material with placeholder data
+  text: |
+    Bài tập: điền thông tin khách hàng mẫu vào biểu mẫu, ví dụ họ tên Nguyễn Văn A,
+    số giấy tờ 000000000000.
+
+- id: clean-017
+  note: branch opening hours
+  text: |
+    Từ ngày 01/3/2026, giờ giao dịch tại quầy: buổi sáng 08h00-11h30, buổi chiều 13h30-16h30.
+
+- id: clean-018
+  note: accounting entry description
+  text: |
+    Hạch toán vào tài khoản kế toán 4211 - Tiền gửi không kỳ hạn của khách hàng trong nước.
+
+- id: clean-019
+  note: regulatory reporting deadline
+  text: |
+    Báo cáo gửi Cơ quan Thanh tra, giám sát ngân hàng trước ngày 15 của tháng đầu quý.
+
+- id: clean-020
+  note: bilingual policy statement
+  text: |
+    Ngân hàng bảo mật thông tin khách hàng theo quy định của pháp luật.
+    The bank protects customer information as required by law.
+
+- id: clean-021
+  note: procurement threshold
+  text: |
+    Gói thầu có giá trị trên 2.000.000.000 đồng phải được Hội đồng mua sắm phê duyệt.
+
+- id: clean-022
+  note: staffing structure
+  text: |
+    Phòng Khách hàng cá nhân gồm 12 cán bộ, trong đó 3 kiểm soát viên và 9 giao dịch viên.
+
+- id: clean-023
+  note: risk weights table referencing a circular
+  text: |
+    Loại tài sản | Hệ số rủi ro | Căn cứ
+    Khoản phải đòi Chính phủ | 0% | 41/2016/TT-NHNN
+    Khoản phải đòi doanh nghiệp chưa xếp hạng | 150% | 22/2023/TT-NHNN
+
+- id: clean-024
+  note: system identifier that looks like an account
+  text: |
+    Mã giao dịch hệ thống core banking: 987654321012, dùng để tra soát trong nhật ký.
+
+- id: clean-025
+  note: audit finding, no individual named
+  text: |
+    Kiểm toán nội bộ ghi nhận 3 trường hợp chậm cập nhật hồ sơ tại chi nhánh Hải Phòng.
+
+- id: clean-026
+  note: policy on retention periods
+  text: |
+    Hồ sơ khách hàng được lưu trữ tối thiểu 10 năm kể từ ngày chấm dứt quan hệ.
+
+- id: clean-027
+  note: bank's own contact details
+  text: |
+    Tổng đài hỗ trợ khách hàng: 1900 545415, hoạt động 24/7.
+
+- id: clean-028
+  note: product terms
+  text: |
+    Sản phẩm tiết kiệm linh hoạt: số tiền gửi tối thiểu 1.000.000 VND, kỳ hạn từ 1 đến 36 tháng.
+
+- id: clean-029
+  note: escalation matrix naming roles
+  text: |
+    Trường hợp vượt hạn mức, Trưởng phòng Khách hàng doanh nghiệp trình Phó Tổng giám đốc.
+
+- id: clean-030
+  note: capital plan
+  text: |
+    Kế hoạch tăng vốn điều lệ năm 2026 lên 65.000 tỷ đồng thông qua phát hành cổ phiếu.
+
+- id: clean-031
+  note: compliance training summary
+  text: |
+    Trong năm 2025 có 1.842 lượt cán bộ hoàn thành khóa đào tạo phòng chống rửa tiền.
+
+- id: clean-032
+  note: reference to identity documents as a category
+  text: |
+    Giấy tờ tùy thân hợp lệ bao gồm căn cước công dân, hộ chiếu còn thời hạn.
+
+- id: clean-033
+  note: transaction limits
+  text: |
+    Hạn mức chuyển khoản trên ứng dụng: 500.000.000 VND mỗi ngày đối với khách hàng cá nhân.
+
+- id: clean-034
+  note: IT change record
+  text: |
+    Phiên bản ứng dụng 12345678 được triển khai ngày 20/01/2026 trên môi trường sản xuất.
+
+- id: clean-035
+  note: branch network figures
+  text: |
+    Mạng lưới gồm 296 chi nhánh và phòng giao dịch trên toàn quốc.
+
+- id: clean-036
+  note: legal citation with a decision number
+  text: |
+    Bãi bỏ Quyết định 1627/2001/QĐ-NHNN kể từ ngày Thông tư này có hiệu lực.
+
+- id: clean-037
+  note: sample form template with blank fields
+  text: |
+    Họ và tên: ..................................
+    Số căn cước công dân: ......................
+    Địa chỉ thường trú: ........................
+
+- id: clean-038
+  note: liquidity ratios
+  text: |
+    Tỷ lệ dự trữ thanh khoản đạt 13,1%; tỷ lệ khả năng chi trả trong 30 ngày đạt 55,6%.
+
+- id: clean-039
+  note: outsourcing policy
+  text: |
+    Đơn vị nghiệp vụ phải hoàn thành đánh giá nhà cung cấp trước khi ký hợp đồng thuê ngoài.
+
+- id: clean-040
+  note: meeting minute without customer detail
+  text: |
+    Ủy ban ALCO kết luận duy trì đệm vốn nội bộ ở mức 150 điểm cơ bản trong năm 2026.

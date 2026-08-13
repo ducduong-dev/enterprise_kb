@@ -1,0 +1,29 @@
+{
+  "block_count": 6,
+  "block_types": {
+    "heading": 4,
+    "paragraph": 2
+  },
+  "detected_refs": [
+    [
+      "41/2016/TT-NHNN",
+      "cites"
+    ]
+  ],
+  "doc_meta": {
+    "detected_title": "QD-2023-114",
+    "language": "mixed",
+    "legal_number": "QD-2023-114",
+    "page_count": 1,
+    "source_format": "docx"
+  },
+  "section_paths": [
+    "Phần I",
+    "Phần I > Điều 3",
+    "Phần I > Điều 3 > Khoản 1"
+  ],
+  "tables": [],
+  "text_chars": 441,
+  "text_sha256": "ea6768f552b153333187ce3965d38ccba6dbf3869b2ccf0691b661ea817ba4ec",
+  "warnings": []
+}

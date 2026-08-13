@@ -1,0 +1,8 @@
+# Dev tuning only. Long-running human review steps mean workflow histories stay open for
+# weeks, so retention is generous.
+limit.maxIDLength:
+  - value: 255
+    constraints: {}
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true
+    constraints: {}

@@ -1,0 +1,36 @@
+{
+  "block_count": 4,
+  "block_types": {
+    "heading": 2,
+    "table": 2
+  },
+  "detected_refs": [
+    [
+      "41/2016/TT-NHNN",
+      "cites"
+    ]
+  ],
+  "doc_meta": {
+    "detected_title": "Hạn mức",
+    "language": "vi",
+    "legal_number": null,
+    "page_count": 3,
+    "source_format": "xlsx"
+  },
+  "section_paths": [],
+  "tables": [
+    {
+      "cols": 3,
+      "rows": 3
+    },
+    {
+      "cols": 3,
+      "rows": 3
+    }
+  ],
+  "text_chars": 232,
+  "text_sha256": "c959e7594e93e6523b1ee4e3e2ebc9084d5139e7c1bc579b033751fdd208310e",
+  "warnings": [
+    "skipped hidden sheet 'Tính toán'"
+  ]
+}

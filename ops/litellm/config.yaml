@@ -1,0 +1,99 @@
+# LiteLLM proxy — the one place model traffic leaves the platform (ADR-0024).
+#
+# The services know four roles: generation, vision, embedding, rerank. This file is where a
+# role becomes a provider. Changing which model answers is a change here and a restart, not a
+# code change, a new client library, or a new protocol for anything to learn.
+#
+# It is also the choke point the bank actually needs: one credential store, one place to see
+# spend and rate limits, one audit of what was called. `KB_MODEL_EXTERNAL_MODELS` mirrors the
+# routes below that leave the network, and the platform refuses those until Compliance has
+# ruled ([OPEN]-1) — so this file and that setting are meant to be reviewed together.
+
+model_list:
+  # ------------------------------------------------------------------ on-premises (default)
+  - model_name: kb-generation
+    litellm_params:
+      model: openai/Qwen/Qwen2.5-32B-Instruct
+      api_base: http://vllm-generation:8000/v1
+      api_key: not-needed        # vLLM does not check it; LiteLLM requires the field
+    model_info:
+      mode: chat
+
+  - model_name: kb-vlm
+    litellm_params:
+      model: openai/Qwen/Qwen2.5-VL-7B-Instruct
+      api_base: http://vllm-vlm:8000/v1
+      api_key: not-needed
+    model_info:
+      mode: chat
+      supports_vision: true
+
+  - model_name: kb-embedding
+    litellm_params:
+      model: openai/BAAI/bge-m3
+      api_base: http://embeddings:80/v1
+      api_key: not-needed
+    model_info:
+      mode: embedding
+
+  - model_name: kb-rerank
+    litellm_params:
+      model: infinity/BAAI/bge-reranker-v2-m3
+      api_base: http://reranker:80
+      api_key: not-needed
+    model_info:
+      mode: rerank
+
+  # ---------------------------------------------------------------------- public providers
+  #
+  # Uncomment to route a role to a model outside the bank. Two things must happen together, and
+  # the platform enforces the second:
+  #
+  #   1. add the alias to KB_MODEL_EXTERNAL_MODELS   (so `leaves_network` is recorded truthfully)
+  #   2. set KB_MODEL_ALLOW_EXTERNAL_PROCESSING=true (Compliance's ruling on [OPEN]-1)
+  #
+  # A scanned page sent to a public vision model is the document itself leaving the building.
+  # That can be the right call — public VLMs read degraded Vietnamese scans better than
+  # anything on-premises today — but it is a decision with a name on it, not a default.
+  #
+  # - model_name: kb-vlm-public
+  #   litellm_params:
+  #     model: gemini/gemini-2.0-flash
+  #     api_key: os.environ/GEMINI_API_KEY
+  #   model_info:
+  #     mode: chat
+  #     supports_vision: true
+  #
+  # - model_name: kb-generation-public
+  #   litellm_params:
+  #     model: openai/gpt-4o
+  #     api_key: os.environ/OPENAI_API_KEY
+  #   model_info:
+  #     mode: chat
+
+litellm_settings:
+  # Documents and answers pass through here. Nothing about them is logged beyond what the
+  # platform's own audit trail already records (INV-11), and no third-party callback gets a
+  # copy of a bank document by default.
+  turn_off_message_logging: true
+  drop_params: true            # a provider that lacks a parameter should not fail the call
+  request_timeout: 120
+  num_retries: 2
+  # Fall back to the on-premises model rather than failing a request outright. The order is
+  # deliberate: a public fallback would turn an outage into an unreviewed disclosure.
+  fallbacks:
+    - kb-generation: [kb-generation]
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  health_check_interval: 60
+  # Per-service virtual keys — so spend and rate limits can be attributed to the caller, since
+  # the DMZ chatbot and the ingestion workflow are not the same tenant even though they share
+  # the proxy — need a database:
+  #
+  #   database_url: os.environ/LITELLM_DATABASE_URL
+  #
+  # Left commented because the `litellm` database is created by the Postgres init script, which
+  # only runs on a fresh volume: a proxy that required it would fail to start on every
+  # already-initialised dev machine, which is a bad first impression of a shared credential
+  # store. Uncomment it in any deployment that has run `CREATE DATABASE litellm`.

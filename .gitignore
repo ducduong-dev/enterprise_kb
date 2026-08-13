@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+
+# Secrets and machine-local config. `.env.example` is the documented template and stays.
+.env
+.env.*
+!.env.example
+# Host-specific port remapping — see the header in the file itself. Committing it makes
+# one developer's port conflicts everybody's. `git add -f` if this becomes shared config.
+docker-compose.override.yml
+
+# Test and lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.playwright/
+
+# Coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Frontend
+node_modules/
+frontend/portal/dist/
+
+# Generated output. Eval and load-test runs are reproducible from the harness; the numbers
+# that matter get written up in an ADR or the sign-off pack instead.
+eval/**/results/
+ops/loadtest/results/
+scratch/
+scratchpad/
+*.log
+
+# Source documents dropped in for local ingestion runs. Real regulatory text should reach
+# the repo through the corpus fixtures, not as loose files in a working tree.
+data/*
+!data/.gitkeep
+
+# Editors and OS
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Patch leftovers
+*.orig
+*.rej

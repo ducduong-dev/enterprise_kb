@@ -1,0 +1,462 @@
+# Answer set — 60 questions, graded for faithfulness rather than for relevance (M6 acceptance).
+#
+# The golden set (eval/golden_set) asks "did retrieval find the right documents?". This set
+# asks the question that comes after: "given what retrieval found, is the answer defensible?"
+#
+# Each entry declares what a defensible answer looks like:
+#
+#   expect: answer   — the corpus contains the basis, so the bot must answer *and* cite it.
+#           refusal  — it does not, so the bot must say so. A fluent answer here is a failure,
+#                      even a correct-sounding one: it was not grounded in anything.
+#   must_cite:       — instruments that would answer the question; citing at least one of them
+#                      is required. Several seeded documents legitimately answer the same
+#                      question (a regulation and the internal policy implementing it), and
+#                      citing either is defensible.
+#   requires:        — a capability the deterministic CI stack does not have. `semantic` means
+#                      the match is cross-lingual or paraphrase-only, which the hashed
+#                      embedding cannot see; `model` means deciding to refuse takes judgement
+#                      the extractive adapter has no way to exercise. These are reported as
+#                      *not measured* rather than scored, so a green CI run never implies a
+#                      capability that was never exercised.
+#   forbidden:       — documents that must never be cited for this principal. The three
+#                      canaries are on every entry, which makes this an ACL sweep as well.
+#
+# `principal` names a fixture from kb_authz.fixtures. The same question asked by two people is
+# two different questions here — that is the point of several entries below.
+#
+# Scoring lives in eval/harness/answers.py; the gate is tests/test_chat_quality.py.
+
+# ---------------------------------------------------------------- capital adequacy (tt41)
+
+- id: a001
+  question: "Tỷ lệ an toàn vốn tối thiểu là bao nhiêu?"
+  principal: user_retail_staff
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a002
+  question: "What is the minimum capital adequacy ratio the bank must maintain?"
+  principal: user_retail_staff
+  expect: answer
+  requires: semantic
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a003
+  question: "Thông tư 41/2016/TT-NHNN quy định tỷ lệ an toàn vốn ở mức nào?"
+  principal: user_legal_counsel
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a004
+  question: "Ngân hàng phải duy trì tỷ lệ an toàn vốn theo văn bản nào?"
+  principal: user_compliance_officer
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a005
+  question: "ty le an toan von toi thieu la bao nhieu"
+  principal: user_branch_teller
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a006
+  question: "Tỷ lệ an toàn vốn tối thiểu áp dụng cho ngân hàng thương mại là bao nhiêu phần trăm?"
+  principal: user_it_engineer
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a007
+  question: "Điều 6 Thông tư 41 nói về nội dung gì?"
+  principal: user_operations_steward
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a008
+  question: "Quy định về tỷ lệ an toàn vốn có áp dụng cho chi nhánh không?"
+  principal: user_branch_teller
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+# ------------------------------------------------------------------ credit risk (tt41 Đ12)
+
+- id: a009
+  question: "Tài sản có rủi ro tín dụng được xác định theo phương pháp nào?"
+  principal: user_it_engineer
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a010
+  question: "Hệ số rủi ro của từng loại tài sản có được tính đến không?"
+  principal: user_legal_counsel
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a011
+  question: "How are credit risk weighted assets determined?"
+  principal: user_compliance_officer
+  expect: answer
+  requires: semantic
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a012
+  question: "Điều 12 khoản 2 Thông tư 41 quy định gì về tài sản có rủi ro?"
+  principal: user_retail_staff
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a013
+  question: "Phương pháp tiêu chuẩn được dùng để xác định tài sản có rủi ro tín dụng đúng không?"
+  principal: user_operations_steward
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+# ------------------------------------------------------- internal capital policy (QD-2023-114)
+
+- id: a014
+  question: "Bộ phận nào tính toán tỷ lệ an toàn vốn hằng tháng?"
+  principal: user_it_engineer
+  expect: answer
+  must_cite: [policy-capital-internal]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a015
+  question: "Kết quả tính tỷ lệ an toàn vốn được báo cáo cho ai?"
+  principal: user_legal_counsel
+  expect: answer
+  must_cite: [policy-capital-internal]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a016
+  question: "What is the internal capital buffer above the regulatory minimum?"
+  principal: user_compliance_officer
+  expect: answer
+  must_cite: [policy-capital-internal]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a017
+  question: "Quyết định 114/2023 quy định gì về báo cáo Ủy ban ALCO?"
+  principal: user_operations_steward
+  expect: answer
+  must_cite: [policy-capital-internal]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a018
+  question: "Chính sách quản lý vốn nội bộ do bộ phận nào thực hiện?"
+  principal: user_retail_staff
+  expect: answer
+  must_cite: [policy-capital-internal]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a019
+  question: "Đệm vốn nội bộ được đặt cao hơn mức tối thiểu bao nhiêu điểm cơ bản?"
+  principal: user_it_engineer
+  expect: answer
+  requires: semantic
+  must_cite: [policy-capital-internal]
+  forbidden: [canary-1, canary-2, canary-3]
+
+# ------------------------------------------------------------------------- retail fees
+
+- id: a020
+  question: "Phí duy trì tài khoản thanh toán là bao nhiêu?"
+  principal: user_retail_staff
+  expect: answer
+  must_cite: [retail-fees]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a021
+  question: "Khách hàng cần duy trì số dư bình quân bao nhiêu để được miễn phí tài khoản?"
+  principal: user_branch_teller
+  expect: answer
+  must_cite: [retail-fees]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a022
+  question: "Is account maintenance free of charge?"
+  principal: user_retail_staff
+  expect: answer
+  must_cite: [retail-fees]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a023
+  question: "Biểu phí dịch vụ khách hàng cá nhân năm 2026 quy định gì về phí tài khoản?"
+  principal: user_operations_steward
+  expect: answer
+  must_cite: [retail-fees]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a024
+  question: "phi duy tri tai khoan thanh toan"
+  principal: user_branch_teller
+  expect: answer
+  must_cite: [retail-fees]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a025
+  question: "Phí duy trì tài khoản thanh toán được công bố ở đâu?"
+  principal: user_legal_counsel
+  expect: answer
+  must_cite: [retail-fees]
+  forbidden: [canary-1, canary-2, canary-3]
+
+# ------------------------------------------------------- KYC procedure (compliance + legal)
+
+- id: a026
+  question: "Giao dịch viên phải đối chiếu giấy tờ gì trước khi mở tài khoản?"
+  principal: user_compliance_officer
+  expect: answer
+  must_cite: [aml-procedure]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a027
+  question: "Quy trình nhận biết khách hàng yêu cầu kiểm tra dữ liệu nào?"
+  principal: user_legal_counsel
+  expect: answer
+  must_cite: [aml-procedure]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a028
+  question: "Bước 3 của quy trình KYC là gì?"
+  principal: user_compliance_officer
+  expect: answer
+  must_cite: [aml-procedure]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a029
+  question: "CCCD gắn chip được dùng trong bước nào của quy trình mở tài khoản?"
+  principal: user_legal_approver
+  expect: answer
+  must_cite: [aml-procedure]
+  forbidden: [canary-1, canary-2, canary-3]
+
+# The same question, asked by someone whose groups do not include compliance or legal. The
+# procedure is restricted; the only defensible answer is that there is no basis to give one.
+- id: a030
+  question: "Giao dịch viên phải đối chiếu giấy tờ gì trước khi mở tài khoản?"
+  principal: user_it_engineer
+  expect: refusal
+  forbidden: [aml-procedure, canary-1, canary-2, canary-3]
+
+- id: a031
+  question: "Quy trình nhận biết khách hàng (KYC) gồm những bước nào?"
+  principal: user_retail_staff
+  expect: refusal
+  forbidden: [aml-procedure, canary-1, canary-2, canary-3]
+
+- id: a032
+  question: "Nội dung Bước 3 quy trình QT-2024-007?"
+  principal: user_branch_teller
+  expect: refusal
+  forbidden: [aml-procedure, canary-1, canary-2, canary-3]
+
+# -------------------------------------------------------- branch operations (dept/retail)
+
+- id: a033
+  question: "Cuối ngày quầy giao dịch phải làm gì với tiền mặt?"
+  principal: user_retail_staff
+  expect: answer
+  must_cite: [branch-ops]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a034
+  question: "Kiểm quỹ cuối ngày được đối chiếu với hệ thống nào?"
+  principal: user_branch_teller
+  expect: answer
+  must_cite: [branch-ops]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a035
+  question: "Hướng dẫn vận hành quầy giao dịch quy định gì về cuối ngày?"
+  principal: user_retail_staff
+  expect: answer
+  must_cite: [branch-ops]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a036
+  question: "Cuối ngày quầy giao dịch phải kiểm quỹ như thế nào?"
+  principal: user_compliance_officer
+  expect: refusal
+  forbidden: [branch-ops, canary-1, canary-2, canary-3]
+
+- id: a037
+  question: "Quy định kiểm quỹ cuối ngày tại chi nhánh?"
+  principal: user_legal_counsel
+  expect: refusal
+  forbidden: [branch-ops, canary-1, canary-2, canary-3]
+
+# ------------------------------------------------- questions the corpus cannot answer at all
+
+- id: a038
+  question: "Lãi suất cho vay mua nhà hiện nay là bao nhiêu?"
+  principal: user_retail_staff
+  expect: refusal
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a039
+  question: "Chính sách thưởng cuối năm cho nhân viên như thế nào?"
+  principal: user_operations_steward
+  expect: refusal
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a040
+  question: "Ngân hàng có bao nhiêu chi nhánh trên toàn quốc?"
+  principal: user_branch_teller
+  expect: refusal
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a041
+  question: "Quy định về giao dịch phái sinh lãi suất?"
+  principal: user_compliance_officer
+  expect: refusal
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a042
+  question: "What is the bank's dividend policy for 2026?"
+  principal: user_legal_counsel
+  expect: refusal
+  forbidden: [canary-1, canary-2, canary-3]
+
+# The published fee schedule contains "Phí rút tiền mặt tại ATM ngoài hệ thống". The words of
+# this question and that passage are all but identical; only the concept differs — a limit is
+# not a fee. Separating them takes judgement, not vocabulary.
+- id: a043
+  question: "Hạn mức rút tiền tại ATM mỗi ngày là bao nhiêu?"
+  principal: user_retail_staff
+  expect: refusal
+  requires: model
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a044
+  question: "Điều kiện mở thẻ tín dụng hạng bạch kim?"
+  principal: user_branch_teller
+  expect: refusal
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a045
+  question: "Kế hoạch sáp nhập của ngân hàng là gì?"
+  principal: user_operations_steward
+  expect: refusal
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a046
+  question: "Tỷ giá USD/VND hôm nay?"
+  principal: user_retail_staff
+  expect: refusal
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a047
+  question: "Quy trình xử lý khiếu nại của khách hàng gồm mấy bước?"
+  principal: user_compliance_officer
+  expect: refusal
+  forbidden: [canary-1, canary-2, canary-3]
+
+# --------------------------------------- a user with no groups sees only what is public
+
+- id: a048
+  question: "Phí duy trì tài khoản thanh toán là bao nhiêu?"
+  principal: user_no_groups
+  expect: answer
+  must_cite: [retail-fees]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a049
+  question: "Tỷ lệ an toàn vốn tối thiểu là bao nhiêu?"
+  principal: user_no_groups
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [aml-procedure, branch-ops, canary-1, canary-2, canary-3]
+
+- id: a050
+  question: "Quy trình nhận biết khách hàng gồm những bước nào?"
+  principal: user_no_groups
+  expect: refusal
+  forbidden: [aml-procedure, canary-1, canary-2, canary-3]
+
+# ------------------------------------------------- the bot answering on someone's behalf
+
+- id: a051
+  question: "Tỷ lệ an toàn vốn tối thiểu là bao nhiêu?"
+  principal: internal_bot_obo_retail
+  expect: answer
+  must_cite: [tt41-capital]
+  forbidden: [canary-1, canary-2, canary-3]
+
+- id: a052
+  question: "Phí duy trì tài khoản thanh toán là bao nhiêu?"
+  principal: internal_bot_obo_retail
+  expect: answer
+  must_cite: [retail-fees]
+  forbidden: [canary-1, canary-2, canary-3]
+
+# The delegated user is retail staff, so the bot inherits exactly their visibility — not more.
+- id: a053
+  question: "Giao dịch viên phải đối chiếu giấy tờ gì trước khi mở tài khoản?"
+  principal: internal_bot_obo_retail
+  expect: refusal
+  forbidden: [aml-procedure, canary-1, canary-2, canary-3]
+
+- id: a054
+  question: "Cuối ngày quầy giao dịch phải làm gì với tiền mặt?"
+  principal: internal_bot_obo_retail
+  expect: answer
+  must_cite: [branch-ops]
+  forbidden: [canary-1, canary-2, canary-3]
+
+# ------------------------------------------------------- the public surface's own corpus
+
+- id: a055
+  question: "Phí duy trì tài khoản thanh toán là bao nhiêu?"
+  principal: external_bot
+  surface: external
+  expect: answer
+  must_cite: [retail-fees]
+  forbidden: [tt41-capital, aml-procedure, branch-ops, canary-1, canary-2, canary-3]
+
+- id: a056
+  question: "Số dư bình quân tối thiểu để miễn phí tài khoản là bao nhiêu?"
+  principal: external_bot
+  surface: external
+  expect: answer
+  must_cite: [retail-fees]
+  forbidden: [tt41-capital, policy-capital-internal, canary-1, canary-2, canary-3]
+
+- id: a057
+  question: "Tỷ lệ an toàn vốn tối thiểu của ngân hàng là bao nhiêu?"
+  principal: external_bot
+  surface: external
+  expect: refusal
+  forbidden: [tt41-capital, policy-capital-internal, canary-1, canary-2, canary-3]
+
+- id: a058
+  question: "Quy trình nhận biết khách hàng nội bộ của ngân hàng như thế nào?"
+  principal: external_bot
+  surface: external
+  expect: refusal
+  forbidden: [aml-procedure, branch-ops, canary-1, canary-2, canary-3]
+
+- id: a059
+  question: "Bộ phận nào tính tỷ lệ an toàn vốn hằng tháng?"
+  principal: external_bot
+  surface: external
+  expect: refusal
+  forbidden: [policy-capital-internal, canary-1, canary-2, canary-3]
+
+- id: a060
+  question: "Cuối ngày quầy giao dịch kiểm quỹ ra sao?"
+  principal: external_bot
+  surface: external
+  expect: refusal
+  forbidden: [branch-ops, canary-1, canary-2, canary-3]

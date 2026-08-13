@@ -1,0 +1,36 @@
+{
+  "block_count": 19,
+  "block_types": {
+    "heading": 13,
+    "paragraph": 6
+  },
+  "detected_refs": [
+    [
+      "41/2016/TT-NHNN",
+      "cites"
+    ]
+  ],
+  "doc_meta": {
+    "detected_title": "THÔNG TƯ",
+    "language": "vi",
+    "legal_number": "36/2014/TT-NHNN",
+    "page_count": 2,
+    "source_format": "pdf_native"
+  },
+  "section_paths": [
+    "Chương I",
+    "Chương I > Điều 1",
+    "Chương I > Điều 2",
+    "Chương I > Điều 2 > Khoản 1",
+    "Chương I > Điều 2 > Khoản 2",
+    "Chương II",
+    "Chương II > Điều 10",
+    "Chương II > Điều 9",
+    "Chương II > Điều 9 > Khoản 1",
+    "Chương II > Điều 9 > Khoản 2"
+  ],
+  "tables": [],
+  "text_chars": 705,
+  "text_sha256": "57c4b6c09ab22ad21067ffb8de3aaea91d7699d79eb9950ae4bd367c1b636e44",
+  "warnings": []
+}

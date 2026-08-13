@@ -1,0 +1,24 @@
+{
+  "block_count": 4,
+  "block_types": {
+    "paragraph": 4
+  },
+  "detected_refs": [
+    [
+      "114/2023/QĐ-HĐQT",
+      "cites"
+    ]
+  ],
+  "doc_meta": {
+    "detected_title": "THÔNG BÁO",
+    "language": "vi",
+    "legal_number": null,
+    "page_count": 1,
+    "source_format": "txt"
+  },
+  "section_paths": [],
+  "tables": [],
+  "text_chars": 209,
+  "text_sha256": "4f78d194cabb67153026c9bda2c0649e021675166d4a0b2364d358a5970db0bd",
+  "warnings": []
+}
