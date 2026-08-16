@@ -17,9 +17,11 @@ import {
   ChunkView,
   DocumentInspection,
   EdgeView,
+  DeclarationView,
   ExpiryPanel,
   ExpiryView,
   RechunkResult,
+  decideDeclarations,
   decideEdge,
   decideExpiry,
   inspectDocument,
@@ -43,6 +45,19 @@ const REF_LABEL: Record<string, string> = {
   cites: "Trích dẫn",
   consolidates: "Hợp nhất",
   related: "Liên quan",
+};
+
+const DECLARATION_KIND_LABEL: Record<string, string> = {
+  abrogates: "Bãi bỏ",
+  replaces: "Thay thế",
+  amends: "Sửa đổi, bổ sung",
+};
+
+const DECLARATION_STATE_LABEL: Record<string, string> = {
+  waiting: "Chờ văn bản đích",
+  open: "Chờ xác nhận",
+  applied: "Đã áp dụng",
+  rejected: "Đã từ chối",
 };
 
 const EXPIRY_STATE_LABEL: Record<string, string> = {
@@ -170,6 +185,132 @@ function EgoMap({
  * A proposal is visibly inert: it says so, because the gap between proposing and confirming is
  * the entire safety property and a screen that blurs it would undo the design.
  */
+/**
+ * What this document declares about other instruments (ADR-0039).
+ *
+ * On the *declaring* document's screen because that is where the evidence lives: a closing
+ * article declares a dozen changes from one paragraph, so they are selected together and the
+ * sentence is read once. That is the whole economics of the declared path — if confirming a
+ * dozen readings cost a dozen screens, the cheap path would feel like the expensive one.
+ *
+ * The evidence is the largest thing in each row on purpose. It is what a steward is actually
+ * checking; the anchors and dates are what the platform derived from it.
+ */
+function DeclarationSection({
+  declarations,
+  busy,
+  onDecide,
+}: {
+  declarations: DeclarationView[];
+  busy: boolean;
+  onDecide: (ids: string[], confirm: boolean) => void;
+}) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const actionable = declarations.filter((d) => d.actionable);
+
+  function toggle(id: string) {
+    setSelected((current) =>
+      current.includes(id) ? current.filter((item) => item !== id) : [...current, id],
+    );
+  }
+
+  return (
+    <section className="inspect__block">
+      <h2>Văn bản này tuyên bố</h2>
+      <p className="hint">
+        Đọc từ chính câu trong văn bản. Chưa có tác dụng gì cho đến khi được xác nhận — khi xác
+        nhận, các điều khoản được nêu sẽ ngừng xuất hiện trong tìm kiếm kể từ ngày hiệu lực.
+      </p>
+
+      <table className="table">
+        <thead>
+          <tr>
+            <th />
+            <th>Hành vi</th>
+            <th>Văn bản đích</th>
+            <th>Điều khoản</th>
+            <th>Hiệu lực từ</th>
+            <th>Trạng thái</th>
+          </tr>
+        </thead>
+        <tbody>
+          {declarations.map((item) => (
+            <tr key={item.declaration_id} className={item.actionable ? "" : "row--closed"}>
+              <td>
+                <input
+                  type="checkbox"
+                  disabled={!item.actionable || busy}
+                  checked={selected.includes(item.declaration_id)}
+                  onChange={() => toggle(item.declaration_id)}
+                  aria-label="Chọn tuyên bố"
+                />
+              </td>
+              <td>{DECLARATION_KIND_LABEL[item.kind] ?? item.kind}</td>
+              <td>
+                {/* A target the caller may not read is named by its number and never by its
+                    title: the number is in this document's own text, the title is not. */}
+                {item.target_title ?? item.target_legal_number}
+                {!item.target_readable && item.target_document_id && (
+                  <div className="hint">(không có quyền xem văn bản đích)</div>
+                )}
+                {!item.target_document_id && (
+                  <div className="warn">chưa có trong hệ thống</div>
+                )}
+              </td>
+              <td>
+                {item.whole_instrument ? "Toàn văn bản" : item.target_anchors.join(", ")}
+                {item.replacement_anchors.length > 0 && (
+                  <div className="hint">← {item.replacement_anchors.join(", ")} của văn bản này</div>
+                )}
+              </td>
+              <td>{item.effective_from ?? "—"}</td>
+              <td>
+                {DECLARATION_STATE_LABEL[item.state] ?? item.state}
+                {item.decided_by && <div className="hint">{item.decided_by}</div>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      {declarations.map((item) => (
+        <blockquote key={`${item.declaration_id}-evidence`} className="inspect__evidence">
+          {item.evidence}
+        </blockquote>
+      ))}
+
+      <div className="inspect__declaration-actions">
+        <button
+          disabled={busy || selected.length === 0}
+          onClick={() => {
+            onDecide(selected, true);
+            setSelected([]);
+          }}
+        >
+          Xác nhận {selected.length > 0 ? `(${selected.length})` : ""}
+        </button>
+        <button
+          disabled={busy || selected.length === 0}
+          onClick={() => {
+            onDecide(selected, false);
+            setSelected([]);
+          }}
+        >
+          Từ chối
+        </button>
+        {actionable.length > 1 && (
+          <button
+            disabled={busy}
+            onClick={() => setSelected(actionable.map((d) => d.declaration_id))}
+          >
+            Chọn tất cả ({actionable.length})
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function ExpirySection({
   panel,
   busy,
@@ -440,6 +581,32 @@ export function DocumentDetail({ documentId }: { documentId: string }) {
     }
   }
 
+  async function onDecideDeclarations(ids: string[], confirm: boolean) {
+    const question = confirm
+      ? `Xác nhận ${ids.length} tuyên bố? Các điều khoản được nêu sẽ ngừng xuất hiện trong tìm kiếm kể từ ngày hiệu lực.`
+      : `Từ chối ${ids.length} tuyên bố? Không có gì được áp dụng.`;
+    if (!window.confirm(question)) return;
+    const reason = confirm ? "" : window.prompt("Lý do từ chối:") ?? "";
+    if (!confirm && !reason.trim()) return;
+    setBusy(true);
+    try {
+      const result = await decideDeclarations(documentId, {
+        declaration_ids: ids,
+        confirm,
+        reason,
+      });
+      const refused = result.refused.length
+        ? ` ${result.refused.length} tuyên bố bị từ chối áp dụng: ${result.refused[0].reason}`
+        : "";
+      setNotice(`Đã xử lý ${result.applied.length} tuyên bố.${refused}`);
+      load();
+    } catch (err) {
+      setError((err as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onDecideExpiry(row: ExpiryView, confirm: boolean) {
     // Confirming removes the document from every default answer from its date. Worth one
     // deliberate click, and worth naming the date in the question rather than "are you sure".
@@ -543,6 +710,14 @@ export function DocumentDetail({ documentId }: { documentId: string }) {
           </tbody>
         </table>
       </section>
+
+      {data.declarations.length > 0 && (
+        <DeclarationSection
+          declarations={data.declarations}
+          busy={busy}
+          onDecide={onDecideDeclarations}
+        />
+      )}
 
       <ExpirySection
         panel={data.expiry}

@@ -11,6 +11,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 
 import jwt
 import pytest
@@ -28,6 +29,7 @@ from kb_portal_api.main import app, inspect_service
 from kb_ports.adapters.embedding_hashed import HashedEmbeddingAdapter
 from kb_ports.adapters.storage_local import LocalStorageAdapter
 from kb_registry import repository as repo
+from kb_registry.expiry import ExpiryLedger
 from kb_registry.publish import Approval, PublishService
 from kb_registry.schemas import DocumentCreate, VersionCreate
 from kb_registry.service import RegistryService
@@ -912,3 +914,174 @@ def test_an_expiry_without_a_reason_is_refused_at_the_edge(
         headers=auth("u-steward", [Role.STEWARD]),
     )
     assert response.status_code == 422
+
+
+# ------------------------------------------------- the declaration batch screen (M9c)
+
+
+def _declare_on(corpus: Corpus, **kwargs: Any) -> uuid.UUID:
+    """A declaration by the amendment against the circular."""
+    from kb_registry import repository as repo
+    from kb_registry.schemas import DeclarationIn
+
+    target = repo.get_document(corpus.session, corpus.circular)
+    assert target is not None
+    corpus.registry.record_declarations(
+        corpus.amendment,
+        [
+            DeclarationIn(
+                kind=kwargs.pop("kind", "replaces"),
+                target_legal_number=str(target.legal_number),
+                evidence="Điều 1 Thông tư này thay thế Điều 6 Thông tư về dự trữ bắt buộc.",
+                effective_from=date(2027, 1, 1),
+                **kwargs,
+            )
+        ],
+    )
+    corpus.session.flush()
+    return repo.declarations_from(corpus.session, corpus.amendment)[-1].id
+
+
+def test_the_screen_shows_what_this_document_declares(
+    corpus: Corpus, inspector: InspectService
+) -> None:
+    """On the *declaring* document's screen, because that is where the evidence lives — one
+    closing article, a dozen changes, the sentence read once (ADR-0039)."""
+    _declare_on(corpus, target_anchors=["6"], replacement_anchors=["1"])
+
+    view = inspector.inspect(corpus.amendment, principal()).declarations[0]
+
+    assert view.kind == "replaces"
+    assert view.target_document_id == corpus.circular
+    assert view.target_anchors == ["6"]
+    assert view.replacement_anchors == ["1"]
+    assert "thay thế" in view.evidence
+    assert view.actionable
+
+
+def test_a_declaration_against_a_document_the_caller_cannot_read_withholds_its_title(
+    corpus: Corpus, inspector: InspectService, session: Session
+) -> None:
+    """The declaration is this document's own text and is shown. The target's title is somebody
+    else's content, and naming it here would be the disclosure the graph view refuses."""
+    from kb_registry import repository as repo
+    from kb_registry.schemas import DeclarationIn
+
+    secret = repo.get_document(session, corpus.secret)
+    assert secret is not None
+    secret_number = secret.legal_number or "SECRET-1"
+    session.execute(
+        __import__("sqlalchemy").text("UPDATE documents SET legal_number = :n WHERE id = :d"),
+        {"n": secret_number, "d": corpus.secret},
+    )
+    session.flush()
+    corpus.registry.record_declarations(
+        corpus.amendment,
+        [
+            DeclarationIn(
+                kind="abrogates",
+                target_legal_number=secret_number,
+                evidence="Bãi bỏ văn bản hạn chế.",
+                effective_from=date(2027, 1, 1),
+            )
+        ],
+    )
+    session.flush()
+
+    outsider = inspector.inspect(corpus.amendment, principal("user_it_engineer"))
+    view = next(d for d in outsider.declarations if d.target_legal_number == secret_number)
+    assert view.target_title is None
+    assert not view.target_readable
+
+    insider = inspector.inspect(corpus.amendment, principal("user_legal_counsel"))
+    seen = next(d for d in insider.declarations if d.target_legal_number == secret_number)
+    assert seen.target_title
+
+
+def test_confirming_a_batch_ends_the_clauses_and_reports_each_one(
+    corpus: Corpus, inspector: InspectService, session: Session
+) -> None:
+    first = _declare_on(corpus, target_anchors=["6"], replacement_anchors=["1"])
+
+    result = inspector.decide_declarations(
+        corpus.amendment,
+        principal(),
+        declaration_ids=[first],
+        confirm=True,
+    )
+
+    assert result["refused"] == []
+    assert result["applied"][0]["state"] == "applied"
+    live = session.execute(
+        __import__("sqlalchemy").text(
+            "SELECT count(*) FROM chunks WHERE document_id = :d AND article = 6 "
+            "AND (effective_to IS NULL OR effective_to >= DATE '2027-01-01')"
+        ),
+        {"d": corpus.circular},
+    ).scalar()
+    assert live == 0, "Điều 6 stopped being served on the date the amendment took effect"
+
+
+def test_a_row_that_refuses_does_not_take_the_batch_with_it(
+    corpus: Corpus, inspector: InspectService
+) -> None:
+    """A batch that rolls back wholesale because one row is stale is a batch nobody can make
+    progress on."""
+    good = _declare_on(corpus, target_anchors=["6"])
+    stale = _declare_on(corpus, target_anchors=["12"])
+    inspector.decide_declarations(
+        corpus.amendment, principal(), declaration_ids=[stale], confirm=True
+    )
+
+    result = inspector.decide_declarations(
+        corpus.amendment, principal(), declaration_ids=[good, stale], confirm=True
+    )
+
+    assert [item["declaration_id"] for item in result["applied"]] == [str(good)]
+    assert [item["declaration_id"] for item in result["refused"]] == [str(stale)]
+    assert "not open" in result["refused"][0]["reason"]
+
+
+def test_rejecting_a_declaration_applies_nothing(corpus: Corpus, inspector: InspectService) -> None:
+    declaration = _declare_on(corpus, target_anchors=["6"])
+
+    result = inspector.decide_declarations(
+        corpus.amendment,
+        principal(),
+        declaration_ids=[declaration],
+        confirm=False,
+        reason="đọc nhầm; Điều 6 vẫn còn hiệu lực",
+    )
+
+    assert result["applied"][0]["state"] == "rejected"
+    assert ExpiryLedger(corpus.session).open_row(corpus.circular) is None
+
+
+def test_a_declaration_from_another_document_is_refused(
+    corpus: Corpus, inspector: InspectService
+) -> None:
+    """The id is a body parameter; it must not be a way to act on a different document."""
+    declaration = _declare_on(corpus, target_anchors=["6"])
+
+    with pytest.raises(NotFound):
+        inspector.decide_declarations(
+            corpus.policy, principal(), declaration_ids=[declaration], confirm=True
+        )
+
+
+def test_deciding_declarations_needs_the_steward_role(client: TestClient, corpus: Corpus) -> None:
+    declaration = _declare_on(corpus, target_anchors=["6"])
+    body = {"declaration_ids": [str(declaration)], "confirm": True}
+
+    refused = client.post(
+        f"/v1/documents/{corpus.amendment}/declarations", json=body, headers=auth("u-reader", [])
+    )
+    assert refused.status_code == 403
+
+    allowed = client.post(
+        f"/v1/documents/{corpus.amendment}/declarations",
+        json=body,
+        headers=auth("u-steward", [Role.STEWARD]),
+    )
+    assert allowed.status_code == 200
+    assert allowed.json()["applied"][0]["state"] == "applied"

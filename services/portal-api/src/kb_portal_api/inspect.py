@@ -37,11 +37,12 @@ from kb_common.logging import get_logger
 from kb_ports.models import EmbeddingPort
 from kb_ports.storage import StoragePort
 from kb_registry import repository as repo
+from kb_registry.declarations import DeclarationReview
 from kb_registry.expiry import ExpiryDecision, ExpiryLedger
 from kb_registry.publish import PublishService, RechunkResult
-from kb_schemas.enums import ExpiryBasis, ExpiryState, RefType
+from kb_schemas.enums import DeclarationState, ExpiryBasis, ExpiryState, RefType
 from kb_schemas.kbdoc import KBDoc
-from kb_schemas.orm import DocumentExpiryRow
+from kb_schemas.orm import DocumentDeclarationRow, DocumentExpiryRow
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -174,6 +175,60 @@ class ExpiryView:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class DeclarationView:
+    """One thing this document says it does to another instrument (ADR-0039).
+
+    Shown on the declaring document's screen rather than the target's, because that is where
+    the evidence lives: a closing article declares a dozen changes from one paragraph, and a
+    steward confirms them together with the sentence read once.
+    """
+
+    declaration_id: uuid.UUID
+    kind: str
+    state: str
+    target_legal_number: str
+    target_document_id: uuid.UUID | None
+    #: Withheld when the caller may not read the target. The declaration is still shown — it is
+    #: this document's own text — but the target's title is content, and naming it here would
+    #: be the disclosure the graph view already refuses (INV-2, ADR-0023).
+    target_title: str | None
+    target_readable: bool
+    target_anchors: list[str]
+    replacement_anchors: list[str]
+    effective_from: str | None
+    evidence: str
+    confidence: float | None
+    decided_by: str | None
+
+    @property
+    def actionable(self) -> bool:
+        """Ready for a decision: the target is in the registry and nobody has decided yet."""
+        return self.state == DeclarationState.OPEN.value and self.target_document_id is not None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "declaration_id": str(self.declaration_id),
+            "kind": self.kind,
+            "state": self.state,
+            "target_legal_number": self.target_legal_number,
+            "target_document_id": (
+                str(self.target_document_id) if self.target_document_id else None
+            ),
+            "target_title": self.target_title,
+            "target_readable": self.target_readable,
+            "target_anchors": self.target_anchors,
+            "replacement_anchors": self.replacement_anchors,
+            "effective_from": self.effective_from,
+            "evidence": self.evidence,
+            "confidence": self.confidence,
+            "decided_by": self.decided_by,
+            "actionable": self.actionable,
+            # True when the declaration names no clause: it ends the whole instrument.
+            "whole_instrument": not self.target_anchors,
+        }
+
+
 @dataclass
 class ExpiryPanel:
     """The expiry section of the screen: what is in force, and how it got there."""
@@ -210,6 +265,9 @@ class DocumentInspection:
     edges: list[EdgeView] = field(default_factory=list)
     lineage: list[dict[str, Any]] = field(default_factory=list)
     expiry: ExpiryPanel = field(default_factory=ExpiryPanel)
+    #: What this document declares about others. Almost always empty — most instruments are
+    #: not amendments — and when it is not, this is the ~80% supersession path (ADR-0039).
+    declarations: list[DeclarationView] = field(default_factory=list)
     #: References this document makes to instruments the bank does not hold. Not edges — the
     #: target does not exist — but the reviewer's most useful question about the graph is
     #: "what is missing", and the answer is exactly this list (ADR-0028).
@@ -225,6 +283,7 @@ class DocumentInspection:
             "edges": [edge.as_dict() for edge in self.edges],
             "lineage": self.lineage,
             "expiry": self.expiry.as_dict(),
+            "declarations": [item.as_dict() for item in self.declarations],
             "pending": self.pending,
             "unreadable_edges": self.unreadable_edges,
             "warnings": self.warnings,
@@ -280,6 +339,7 @@ class InspectService:
             for row in repo.pending_refs_from(self._session, document_id)
         ]
         inspection.expiry = self._expiry(document_id, canonical_id)
+        inspection.declarations = self._declarations(document_id, principal)
         inspection.warnings = self._warnings(document, inspection)
         return inspection
 
@@ -471,6 +531,63 @@ class InspectService:
             panel.in_force_source = "ledger" if in_force != version_date else "version"
         return panel
 
+    def _declarations(self, document_id: uuid.UUID, principal: Principal) -> list[DeclarationView]:
+        """What this document declares, with the targets this caller may see named.
+
+        The declaration itself is this document's own text, so it is always shown. The
+        *target's* title is somebody else's content, and withholding it here is the same rule
+        the edge list already applies (INV-2).
+        """
+        rows = list(repo.declarations_from(self._session, document_id))
+        if not rows:
+            return []
+
+        readable = self._readable_titles(
+            {row.target_document_id for row in rows if row.target_document_id}, principal
+        )
+        return [
+            DeclarationView(
+                declaration_id=row.id,
+                kind=row.kind,
+                state=row.state,
+                target_legal_number=row.target_legal_number,
+                target_document_id=row.target_document_id,
+                target_title=(
+                    readable.get(row.target_document_id) if row.target_document_id else None
+                ),
+                target_readable=row.target_document_id is not None
+                and row.target_document_id in readable,
+                target_anchors=list(row.target_anchors or []),
+                replacement_anchors=list(row.replacement_anchors or []),
+                effective_from=row.effective_from.isoformat() if row.effective_from else None,
+                evidence=row.evidence,
+                confidence=row.confidence,
+                decided_by=row.decided_by,
+            )
+            for row in rows
+        ]
+
+    def _readable_titles(
+        self, document_ids: set[uuid.UUID], principal: Principal
+    ) -> dict[uuid.UUID, str]:
+        """Titles of the documents in this set the caller may read, and no others.
+
+        The filter comes from the one module that owns it. A second copy of "restricted unless
+        you hold the group" written here is how the two drift apart (INV-2).
+        """
+        if not document_ids:
+            return {}
+        where, params = compile_sql_documents(self._filters.base(principal), alias="d")
+        params["ids"] = [str(item) for item in document_ids]
+        rows = self._session.execute(
+            text(
+                "SELECT d.id, d.title FROM documents d "
+                f"WHERE d.id = ANY(CAST(:ids AS uuid[])) AND {where}"
+            ),
+            params,
+        )
+        return {row.id: row.title for row in rows}
+
     def _expiry_view(self, row: Any, titles: dict[uuid.UUID, str]) -> ExpiryView:
         return ExpiryView(
             row_id=row.id,
@@ -659,6 +776,73 @@ class InspectService:
         if confirm:
             return _decision_dict(ledger.confirm(row_id, actor=principal.audit_actor))
         return _decision_dict(ledger.revoke(row_id, actor=principal.audit_actor, reason=reason))
+
+    def decide_declarations(
+        self,
+        document_id: uuid.UUID,
+        principal: Principal,
+        *,
+        declaration_ids: list[uuid.UUID],
+        confirm: bool,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Confirm or reject what this document declares — several at once.
+
+        Batch because that is the unit the corpus produces: one closing article declares a
+        dozen changes from one paragraph, read from the same sentence or its neighbours, and a
+        steward who has satisfied themselves about the paragraph has satisfied themselves about
+        all of them (ADR-0039). Forcing one decision per screen would make the cheap path feel
+        like the expensive one.
+
+        Each is applied through `DeclarationReview`, so the ledger's guards hold per row —
+        including four-eyes on the regulated classes. A row that refuses is reported and the
+        rest still apply: a batch that rolls back wholesale because one target has since been
+        archived is a batch nobody can make progress on.
+        """
+        self._readable_document(document_id, principal)
+        review = DeclarationReview(self._session, audit=self._audit)
+        actor = principal.audit_actor
+
+        applied: list[dict[str, Any]] = []
+        refused: list[dict[str, Any]] = []
+        for declaration_id in declaration_ids:
+            row = self._session.get(DocumentDeclarationRow, declaration_id)
+            if row is None or row.src_document_id != document_id:
+                raise NotFound(
+                    "declaration not found on this document",
+                    document_id=str(document_id),
+                    declaration_id=str(declaration_id),
+                )
+            try:
+                outcome = (
+                    review.confirm(declaration_id, actor=actor)
+                    if confirm
+                    else review.reject(declaration_id, actor=actor, reason=reason)
+                )
+            except (Conflict, ValidationError) as exc:
+                refused.append({"declaration_id": str(declaration_id), "reason": str(exc)})
+                continue
+            applied.append(
+                {
+                    "declaration_id": str(outcome.declaration_id),
+                    "state": outcome.state,
+                    "ended": outcome.ended,
+                    "pointers": outcome.pointers,
+                    "chunks_projected": outcome.chunks_projected,
+                    "note": outcome.note,
+                }
+            )
+
+        log.info(
+            "declarations_decided",
+            extra={
+                "document_id": str(document_id),
+                "confirm": confirm,
+                "applied": len(applied),
+                "refused": len(refused),
+            },
+        )
+        return {"applied": applied, "refused": refused}
 
     def set_edge_confirmation(
         self,

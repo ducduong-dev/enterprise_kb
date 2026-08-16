@@ -467,6 +467,41 @@ export interface ExpiryView {
   open: boolean;
 }
 
+/** One thing this document says it does to another instrument (ADR-0039). */
+export interface DeclarationView {
+  declaration_id: string;
+  kind: "abrogates" | "replaces" | "amends";
+  state: "waiting" | "open" | "applied" | "rejected";
+  target_legal_number: string;
+  target_document_id: string | null;
+  /** Null when the caller may not read the target: its title is somebody else's content. */
+  target_title: string | null;
+  target_readable: boolean;
+  target_anchors: string[];
+  replacement_anchors: string[];
+  effective_from: string | null;
+  /** The sentence it was read from — the whole reason confirming one is a glance. */
+  evidence: string;
+  confidence: number | null;
+  decided_by: string | null;
+  /** The target is in the registry and nobody has decided yet. */
+  actionable: boolean;
+  whole_instrument: boolean;
+}
+
+export interface DeclarationDecisionResult {
+  applied: {
+    declaration_id: string;
+    state: string;
+    ended: string[];
+    pointers: number;
+    chunks_projected: number;
+    note: string;
+  }[];
+  /** Rows the ledger's guards turned down. Reported rather than failing the batch. */
+  refused: { declaration_id: string; reason: string }[];
+}
+
 export interface ExpiryPanel {
   /** The date retrieval actually evaluates. Null means the document is in force. */
   in_force: string | null;
@@ -511,6 +546,7 @@ export interface DocumentInspection {
   edges: EdgeView[];
   lineage: LineageEntry[];
   expiry: ExpiryPanel;
+  declarations: DeclarationView[];
   pending: PendingRef[];
   unreadable_edges: number;
   warnings: string[];
@@ -572,6 +608,27 @@ export function decideExpiry(
 ): Promise<ExpiryDecisionResult> {
   return request<ExpiryDecisionResult>(
     `/v1/documents/${encodeURIComponent(documentId)}/expiry/${encodeURIComponent(rowId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+/**
+ * Confirm or reject what this document declares — several at once.
+ *
+ * Batch because that is the unit the corpus produces: one closing article declares a dozen
+ * changes from one paragraph, and a steward satisfied about the paragraph is satisfied about
+ * all of them (ADR-0039).
+ */
+export function decideDeclarations(
+  documentId: string,
+  body: { declaration_ids: string[]; confirm: boolean; reason?: string },
+): Promise<DeclarationDecisionResult> {
+  return request<DeclarationDecisionResult>(
+    `/v1/documents/${encodeURIComponent(documentId)}/declarations`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

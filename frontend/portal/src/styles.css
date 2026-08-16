@@ -172,6 +172,11 @@ button.secondary { background: var(--muted); }
 .lineage__date { color: var(--muted); font-variant-numeric: tabular-nums; }
 .lineage__ok { color: var(--muted); }
 
+/* A declaration's evidence is the largest thing in the row on purpose: the sentence is what a
+   steward is actually checking, and the anchors and dates are what the platform derived from it. */
+.inspect__evidence { margin: 0.5rem 0 0; padding: 0.5rem 0.9rem; border-left: 3px solid var(--line); color: var(--muted); font-style: italic; }
+.inspect__declaration-actions { display: flex; gap: 0.75rem; margin-top: 1rem; flex-wrap: wrap; }
+
 /* Expiry: a closed ledger row is history, not a live decision — dimmed so the open row reads
    as the current belief at a glance (ADR-0030). */
 .row--closed { opacity: 0.55; }

@@ -738,6 +738,45 @@ def decide_expiry(
     )
 
 
+class DeclarationDecisionIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    #: Several at once: a closing article declares a dozen changes from one paragraph, and a
+    #: steward satisfied about the paragraph is satisfied about all of them (ADR-0039).
+    declaration_ids: list[uuid.UUID] = Field(min_length=1, max_length=100)
+    #: True ends the clauses named and records what replaced them; false files the reading as
+    #: wrong, which is kept so the next detection pass does not propose it again.
+    confirm: bool
+    reason: str = Field(default="", max_length=2000)
+
+
+@app.post("/v1/documents/{document_id}/declarations")
+def decide_declarations(
+    document_id: uuid.UUID,
+    body: DeclarationDecisionIn,
+    principal: Principal = Depends(require_role(Role.STEWARD)),
+    inspector: InspectService = Depends(inspect_service),
+) -> dict[str, Any]:
+    """Act on what this document says it does to other instruments.
+
+    Confirming is the moment a repealed clause stops being served, so the guards are the
+    ledger's rather than this route's: a regulated document needs a second pair of eyes
+    (INV-8), and the dates land on the chunks inside the transaction so serving never waits for
+    the nightly sweep (ADR-0031).
+
+    Rows that refuse are reported alongside the ones that applied rather than failing the
+    request. A batch that rolls back wholesale because one target has since been archived is a
+    batch nobody can make progress on.
+    """
+    return inspector.decide_declarations(
+        document_id,
+        principal,
+        declaration_ids=body.declaration_ids,
+        confirm=body.confirm,
+        reason=body.reason,
+    )
+
+
 class PiiOverrideIn(BaseModel):
     model_config = {"extra": "forbid"}
 
