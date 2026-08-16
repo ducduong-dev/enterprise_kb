@@ -496,6 +496,30 @@ class GraphServingRow(Base):
     articles: Mapped[list[int] | None] = mapped_column(ARRAY(Integer))
 
 
+class ModelCacheRow(Base):
+    """One model response, keyed by everything that can change it (ADR-0035).
+
+    The rendered prompt is in the key, which is what makes the cache safe: a document whose
+    text changed produces a different prompt and therefore a different key, so a cached
+    judgement can never be served for text it was not made about. That is also why the key is
+    not a document or chunk id — those survive an edit that changes the answer.
+    """
+
+    __tablename__ = "model_cache"
+
+    key: Mapped[str] = mapped_column(Text, primary_key=True)
+    model_id: Mapped[str] = mapped_column(Text, nullable=False)
+    prompt_version: Mapped[str | None] = mapped_column(Text)
+    response: Mapped[str] = mapped_column(Text, nullable=False)
+    finish_reason: Mapped[str | None] = mapped_column(Text)
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: Eviction is size-based and least-recently-used.
+    last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    hits: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class AuditLogRow(Base):
     __tablename__ = "audit_log"
 
