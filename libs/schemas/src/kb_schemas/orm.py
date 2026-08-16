@@ -367,6 +367,54 @@ class DocumentExpiryRow(Base):
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class DocumentDeclarationRow(Base):
+    """A sentence in which one instrument says what it does to another (ADR-0039).
+
+    Neither of the records it will become — an expiry ledger row and a supersession pointer —
+    so it lives in its own table, for the same reason `pending_document_refs` does: putting it
+    in either would mean every consumer of those tables remembering to exclude it.
+
+    `target_document_id` is NULL while the instrument being declared against is not in the
+    registry. That is not an error state; it is the common one while a corpus is being loaded.
+    """
+
+    __tablename__ = "document_declarations"
+    __table_args__ = (
+        CheckConstraint("kind IN ('abrogates','replaces','amends')", name="ck_decl_kind"),
+        CheckConstraint("state IN ('waiting','open','applied','rejected')", name="ck_decl_state"),
+        CheckConstraint("src_document_id <> target_document_id", name="ck_decl_not_self"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    src_document_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    target_legal_number: Mapped[str] = mapped_column(Text, nullable=False)
+    #: `normalize_legal_number` of the above: what the arrival lookup matches on.
+    target_key: Mapped[str] = mapped_column(Text, nullable=False)
+    target_document_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("documents.id", ondelete="SET NULL")
+    )
+    #: Stored as read, not resolved to section paths: at detection the target may have no
+    #: chunks at all. Resolution happens at confirmation (ADR-0036).
+    target_anchors: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    replacement_anchors: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    effective_from: Mapped[date | None] = mapped_column(Date)
+    #: The sentence. Not nullable — a declaration without the words it was read from cannot be
+    #: confirmed at a glance, which is this path's entire economics.
+    evidence: Mapped[str] = mapped_column(Text, nullable=False)
+    block_id: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    state: Mapped[str] = mapped_column(Text, nullable=False)
+    detected_by: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_by: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class ClauseSupersessionRow(Base):
     """One clause replaced by another (ADR-0033/0039/0040).
 

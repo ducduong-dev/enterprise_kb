@@ -11,8 +11,10 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+from kb_common.db import affected_rows
 from kb_schemas.orm import (
     CategoryRow,
+    DocumentDeclarationRow,
     DocumentRefRow,
     DocumentRow,
     DocumentVersionRow,
@@ -261,6 +263,75 @@ def add_pending_ref(session: Session, row: PendingDocumentRefRow) -> PendingDocu
         },
     )
     return row
+
+
+def add_declaration(session: Session, row: DocumentDeclarationRow) -> bool:
+    """Store a read declaration. Returns False when the same one is already recorded.
+
+    Idempotent on `(src, target_key, kind, anchors)`: re-ingesting a document must not
+    accumulate duplicate readings of the same sentence. Anchors are in the key because one
+    closing article legitimately declares several changes against the same instrument.
+    """
+    result = session.execute(
+        text(
+            """
+            INSERT INTO document_declarations (id, src_document_id, kind, target_legal_number,
+                target_key, target_document_id, target_anchors, replacement_anchors,
+                effective_from, evidence, block_id, confidence, state, detected_by, created_at)
+            VALUES (:id, :src, :kind, :number, :key, :target, CAST(:target_anchors AS TEXT[]),
+                CAST(:replacement_anchors AS TEXT[]), :effective_from, :evidence, :block_id,
+                :confidence, :state, :detected_by, :created_at)
+            ON CONFLICT DO NOTHING
+            """
+        ),
+        {
+            "id": row.id,
+            "src": row.src_document_id,
+            "kind": row.kind,
+            "number": row.target_legal_number,
+            "key": row.target_key,
+            "target": row.target_document_id,
+            "target_anchors": list(row.target_anchors) if row.target_anchors else None,
+            "replacement_anchors": (
+                list(row.replacement_anchors) if row.replacement_anchors else None
+            ),
+            "effective_from": row.effective_from,
+            "evidence": row.evidence,
+            "block_id": row.block_id,
+            "confidence": row.confidence,
+            "state": row.state,
+            "detected_by": row.detected_by,
+            "created_at": row.created_at,
+        },
+    )
+    return affected_rows(result) > 0
+
+
+def waiting_declarations_for(session: Session, target_key: str) -> Sequence[DocumentDeclarationRow]:
+    """Declarations parked against a legal number the registry did not hold."""
+    return (
+        session.execute(
+            select(DocumentDeclarationRow).where(
+                DocumentDeclarationRow.target_key == target_key,
+                DocumentDeclarationRow.target_document_id.is_(None),
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+def declarations_from(session: Session, document_id: uuid.UUID) -> Sequence[DocumentDeclarationRow]:
+    """Everything this document declares, for the batch review screen."""
+    return (
+        session.execute(
+            select(DocumentDeclarationRow)
+            .where(DocumentDeclarationRow.src_document_id == document_id)
+            .order_by(DocumentDeclarationRow.created_at, DocumentDeclarationRow.id)
+        )
+        .scalars()
+        .all()
+    )
 
 
 def pending_refs_for(session: Session, target_key: str) -> Sequence[PendingDocumentRefRow]:

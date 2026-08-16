@@ -21,6 +21,7 @@ from kb_common.config import Settings, get_settings
 from kb_common.errors import Conflict, NotFound, ValidationError
 from kb_common.logging import get_logger
 from kb_schemas.enums import (
+    DeclarationState,
     DocClass,
     DocStatus,
     PiiStatus,
@@ -31,6 +32,7 @@ from kb_schemas.enums import (
 )
 from kb_schemas.kbdoc import KBDoc
 from kb_schemas.orm import (
+    DocumentDeclarationRow,
     DocumentRefRow,
     DocumentRow,
     DocumentVersionRow,
@@ -41,7 +43,13 @@ from kb_vntext.legal_numbers import normalize_legal_number
 from sqlalchemy.orm import Session
 
 from kb_registry import repository as repo
-from kb_registry.schemas import DetectedRefIn, DocumentCreate, DocumentUpdate, VersionCreate
+from kb_registry.schemas import (
+    DeclarationIn,
+    DetectedRefIn,
+    DocumentCreate,
+    DocumentUpdate,
+    VersionCreate,
+)
 
 log = get_logger(__name__)
 
@@ -180,6 +188,7 @@ class RegistryService:
         # number enters the registry — from the workflow, the registry API or the seeder alike.
         if row.legal_number:
             self.resolve_pending_refs(row.id)
+            self.resolve_waiting_declarations(row.id)
         return row
 
     def set_effective_from(
@@ -576,6 +585,94 @@ class RegistryService:
             )
             created.append(row.id)
         return created, unresolved
+
+    def record_declarations(
+        self, document_id: uuid.UUID, declarations: list[DeclarationIn]
+    ) -> tuple[int, int]:
+        """Store what this document says it does to other instruments.
+
+        Returns `(recorded, waiting)`. Nothing is decided and nothing is served differently:
+        these are readings of sentences, and a steward confirms them (ADR-0039).
+
+        A declaration whose target the registry does not hold is stored `waiting` rather than
+        dropped. That is not an edge case — an archive digitised in whatever order it yields
+        routinely produces the amending instrument first, and a declaration discarded at that
+        moment is one nobody can recover, because the citing text is never read again
+        (ADR-0028).
+        """
+        recorded = 0
+        waiting = 0
+        for item in declarations:
+            key = normalize_legal_number(item.target_legal_number)
+            target = repo.find_by_legal_number(self._session, item.target_legal_number)
+            if target is not None and target.id == document_id:
+                # A document declaring against itself is a renumbering, which is the merge
+                # flow's business — recording it here would produce a document that supersedes
+                # itself (ADR-0039).
+                continue
+
+            state = DeclarationState.OPEN if target is not None else DeclarationState.WAITING
+            added = repo.add_declaration(
+                self._session,
+                DocumentDeclarationRow(
+                    id=uuid.uuid4(),
+                    src_document_id=document_id,
+                    kind=item.kind,
+                    target_legal_number=item.target_legal_number,
+                    target_key=key,
+                    target_document_id=target.id if target else None,
+                    target_anchors=item.target_anchors or None,
+                    replacement_anchors=item.replacement_anchors or None,
+                    effective_from=item.effective_from,
+                    evidence=item.evidence,
+                    block_id=item.block_id,
+                    confidence=item.confidence,
+                    state=state.value,
+                    detected_by=item.detected_by,
+                    created_at=repo.now(),
+                ),
+            )
+            if not added:
+                continue
+            recorded += 1
+            waiting += int(target is None)
+
+        if recorded:
+            log.info(
+                "declarations_recorded",
+                extra={
+                    "document_id": str(document_id),
+                    "recorded": recorded,
+                    "waiting": waiting,
+                },
+            )
+        return recorded, waiting
+
+    def resolve_waiting_declarations(self, document_id: uuid.UUID) -> int:
+        """Attach every parked declaration that names this document.
+
+        Called when a document is registered, which is the moment a legal number becomes
+        resolvable — the same hook `resolve_pending_refs` uses, for the same reason.
+        """
+        document = repo.get_document(self._session, document_id)
+        if document is None or not document.legal_number:
+            return 0
+
+        key = normalize_legal_number(document.legal_number)
+        resolved = 0
+        for row in repo.waiting_declarations_for(self._session, key):
+            if row.src_document_id == document_id:
+                continue
+            row.target_document_id = document_id
+            row.state = DeclarationState.OPEN.value
+            resolved += 1
+        if resolved:
+            self._session.flush()
+            log.info(
+                "declarations_resolved",
+                extra={"document_id": str(document_id), "declarations": resolved},
+            )
+        return resolved
 
     # ---------------------------------------------------------------------- review task
 

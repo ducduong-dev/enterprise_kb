@@ -4,14 +4,21 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from typing import Any
 
 import pytest
 from kb_common.audit import AuditAction, InMemoryAuditSink
 from kb_common.errors import Conflict, NotFound, ValidationError
 from kb_registry import repository as repo
-from kb_registry.schemas import DetectedRefIn, DocumentCreate, DocumentUpdate, VersionCreate
+from kb_registry.schemas import (
+    DeclarationIn,
+    DetectedRefIn,
+    DocumentCreate,
+    DocumentUpdate,
+    VersionCreate,
+)
 from kb_registry.service import RegistryService
-from kb_schemas.enums import DocClass, DocStatus, PiiStatus, RefType, Visibility
+from kb_schemas.enums import DeclarationState, DocClass, DocStatus, PiiStatus, RefType, Visibility
 from kb_schemas.kbdoc import DocMeta, KBDoc
 from kb_schemas.orm import CategoryRow
 from sqlalchemy.orm import Session
@@ -380,3 +387,128 @@ def test_a_parked_reference_keeps_its_anchors_until_the_target_arrives(
     edge = repo.get_edge(registry._session, source.id, target.id, RefType.CITES.value)
     assert edge is not None
     assert edge.anchors == ["8.3a"]
+
+
+# -------------------------------------------------------- declarations (M9c, ADR-0039)
+
+
+def _declaration(number: str, **kwargs: Any) -> DeclarationIn:
+    return DeclarationIn(
+        kind=kwargs.pop("kind", "abrogates"),
+        target_legal_number=number,
+        evidence=kwargs.pop("evidence", "Bãi bỏ khoản 2 Điều 12 của văn bản này."),
+        **kwargs,
+    )
+
+
+def test_a_declaration_against_a_document_we_hold_is_ready_for_review(
+    registry: RegistryService,
+) -> None:
+    target = registry.create_document(
+        spec(title="Thông tư cũ", legal_number="70/2022/TT-DECL"), actor="t"
+    )
+    source = registry.create_document(spec(title="Thông tư mới"), actor="t")
+
+    recorded, waiting = registry.record_declarations(
+        source.id, [_declaration("70/2022/TT-DECL", target_anchors=["12.2"])]
+    )
+
+    assert (recorded, waiting) == (1, 0)
+    row = repo.declarations_from(registry._session, source.id)[0]
+    assert row.target_document_id == target.id
+    assert row.state == DeclarationState.OPEN.value
+    assert row.target_anchors == ["12.2"]
+    assert row.evidence, "the sentence travels with the reading"
+
+
+def test_a_declaration_against_a_document_we_do_not_hold_waits(
+    registry: RegistryService,
+) -> None:
+    """An archive digitised in yield order routinely produces the amending instrument first,
+    and the citing text is never read again — so this is parked, not dropped (ADR-0028)."""
+    source = registry.create_document(spec(title="Thông tư đến trước"), actor="t")
+
+    recorded, waiting = registry.record_declarations(source.id, [_declaration("71/2022/TT-DECL")])
+
+    assert (recorded, waiting) == (1, 1)
+    row = repo.declarations_from(registry._session, source.id)[0]
+    assert row.target_document_id is None
+    assert row.state == DeclarationState.WAITING.value
+
+
+def test_a_waiting_declaration_attaches_when_its_target_arrives(
+    registry: RegistryService,
+) -> None:
+    source = registry.create_document(spec(title="Thông tư đến trước"), actor="t")
+    registry.record_declarations(source.id, [_declaration("72/2022/TT-DECL")])
+
+    target = registry.create_document(
+        spec(title="Thông tư đến sau", legal_number="72/2022/TT-DECL"), actor="t"
+    )
+
+    row = repo.declarations_from(registry._session, source.id)[0]
+    assert row.target_document_id == target.id
+    assert row.state == DeclarationState.OPEN.value
+
+
+def test_a_document_declaring_against_itself_is_not_recorded(
+    registry: RegistryService,
+) -> None:
+    """A renumbering is the merge flow's business; recording it here produces a document that
+    supersedes itself (ADR-0039)."""
+    source = registry.create_document(
+        spec(title="Thông tư tự sửa", legal_number="73/2022/TT-DECL"), actor="t"
+    )
+
+    recorded, _ = registry.record_declarations(source.id, [_declaration("73/2022/TT-DECL")])
+
+    assert recorded == 0
+    assert repo.declarations_from(registry._session, source.id) == []
+
+
+def test_re_ingesting_the_same_sentence_does_not_duplicate_it(
+    registry: RegistryService,
+) -> None:
+    registry.create_document(spec(title="Đích", legal_number="74/2022/TT-DECL"), actor="t")
+    source = registry.create_document(spec(title="Nguồn"), actor="t")
+    declarations = [_declaration("74/2022/TT-DECL", target_anchors=["12.2"])]
+
+    first, _ = registry.record_declarations(source.id, declarations)
+    second, _ = registry.record_declarations(source.id, declarations)
+
+    assert (first, second) == (1, 0)
+    assert len(repo.declarations_from(registry._session, source.id)) == 1
+
+
+def test_one_closing_article_may_declare_several_changes_against_one_instrument(
+    registry: RegistryService,
+) -> None:
+    """ "bãi bỏ Điều 5" and "bãi bỏ khoản 2 Điều 12" of the same circular are two decisions, so
+    the anchors are part of what makes a declaration distinct."""
+    registry.create_document(spec(title="Đích", legal_number="75/2022/TT-DECL"), actor="t")
+    source = registry.create_document(spec(title="Nguồn"), actor="t")
+
+    recorded, _ = registry.record_declarations(
+        source.id,
+        [
+            _declaration("75/2022/TT-DECL", target_anchors=["5"]),
+            _declaration("75/2022/TT-DECL", target_anchors=["12.2"]),
+        ],
+    )
+
+    assert recorded == 2
+
+
+def test_recording_a_declaration_changes_nothing_that_is_served(
+    registry: RegistryService,
+) -> None:
+    """The whole point of the state machine: a reading is not a decision (ADR-0039)."""
+    target = registry.create_document(spec(title="Đích", legal_number="76/2022/TT-DECL"), actor="t")
+    source = registry.create_document(spec(title="Nguồn"), actor="t")
+    registry.record_declarations(source.id, [_declaration("76/2022/TT-DECL")])
+
+    from kb_registry.expiry import ExpiryLedger
+
+    assert ExpiryLedger(registry._session).open_row(target.id) is None, (
+        "no expiry is proposed until a steward confirms the declaration"
+    )

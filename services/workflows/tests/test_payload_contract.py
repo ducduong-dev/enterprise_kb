@@ -58,6 +58,16 @@ SAMPLES: list[Any] = [
     types.DetectedRefOut(
         legal_number="41/2016/TT-NHNN", ref_type="cites", block_id="b-3", confidence=0.9
     ),
+    types.DeclarationOut(
+        kind="replaces",
+        target_legal_number="10/2022/TT-NHNN",
+        target_anchors=["12.2"],
+        replacement_anchors=["7"],
+        effective_from="2027-01-01",
+        evidence="Điều 7 Thông tư này thay thế khoản 2 Điều 12 Thông tư 10/2022/TT-NHNN.",
+        block_id="b-42",
+        confidence=0.94,
+    ),
     types.IdpOutcome(
         requires_ocr=False,
         kbdoc_ref="kb-derived/x.kbdoc.json",

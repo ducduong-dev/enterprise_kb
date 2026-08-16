@@ -12,6 +12,7 @@ import json
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from kb_common.audit import SqlAuditSink
@@ -25,13 +26,14 @@ from kb_ports.adapters.storage_s3 import S3StorageAdapter
 from kb_ports.models import GenerationPort, OcrPort, PiiDetectorPort, VlmPort
 from kb_ports.storage import StoragePort
 from kb_registry import repository as repo
-from kb_registry.schemas import DetectedRefIn, DocumentCreate
+from kb_registry.schemas import DeclarationIn, DetectedRefIn, DocumentCreate
 from kb_registry.service import TOPIC_VERSION_CREATED, RegistryService
 from kb_schemas.enums import DocClass, PiiStatus, RefType, ReviewTaskType, Visibility
 from kb_schemas.kbdoc import KBDoc
 from temporalio import activity
 
 from kb_workflows.types import (
+    DeclarationOut,
     DetectedRefOut,
     IdpOutcome,
     IngestRequest,
@@ -182,6 +184,22 @@ async def run_idp(request: IngestRequest) -> IdpOutcome:
             for ref in kbdoc.detected_refs
             if ref.legal_number
         ],
+        declarations=[
+            DeclarationOut(
+                kind=item.kind,
+                target_legal_number=item.target,
+                target_anchors=list(item.target_anchors),
+                replacement_anchors=list(item.replacement_anchors),
+                effective_from=item.effective_from,
+                evidence=item.evidence,
+                block_id=item.block_id,
+                confidence=item.confidence,
+            )
+            for item in kbdoc.declarations
+            # A declaration naming no instrument is about this document itself — a
+            # renumbering, and the merge flow's business (ADR-0039).
+            if item.target
+        ],
         warnings=list(kbdoc.idp_report.warnings),
         page_refs=page_refs,
         page_scores=[round(page.score.score, 3) for page in result.pages],
@@ -307,6 +325,39 @@ def _load_kbdoc(context: Deps, kbdoc_ref: str | None) -> KBDoc:
     return KBDoc.model_validate_json(context.storage.get(bucket, key))
 
 
+@activity.defn(name="record_declarations")
+async def record_declarations(document_id: str, declarations: list[DeclarationOut]) -> int:
+    """Store what this document says it does to other instruments; return how many wait.
+
+    Nothing is decided here and nothing is served differently. A declaration against an
+    instrument the registry does not hold is parked rather than dropped — an archive digitised
+    in yield order routinely produces the amending instrument first, and the citing text is
+    never read again (ADR-0028/0039).
+    """
+    with session_scope() as session:
+        registry = RegistryService(session, audit=SqlAuditSink(session))
+        _recorded, waiting = registry.record_declarations(
+            uuid.UUID(document_id),
+            [
+                DeclarationIn(
+                    kind=item.kind,
+                    target_legal_number=item.target_legal_number,
+                    target_anchors=list(item.target_anchors),
+                    replacement_anchors=list(item.replacement_anchors),
+                    effective_from=(
+                        date.fromisoformat(item.effective_from) if item.effective_from else None
+                    ),
+                    evidence=item.evidence,
+                    block_id=item.block_id,
+                    confidence=item.confidence,
+                    detected_by="idp",
+                )
+                for item in declarations
+            ],
+        )
+        return waiting
+
+
 @activity.defn(name="link_detected_refs")
 async def link_detected_refs(document_id: str, refs: list[DetectedRefOut]) -> list[str]:
     """Create reference edges for targets we already hold; return the unresolved numbers."""
@@ -360,5 +411,6 @@ INGEST_ACTIVITIES: Sequence[Callable[..., Any]] = [
     register_ingest,
     scan_pii,
     link_detected_refs,
+    record_declarations,
     open_review_task,
 ]

@@ -59,6 +59,21 @@ class DetectedRefOut:
 
 
 @dataclass
+class DeclarationOut:
+    """A declaration the IDP read, carried to the registry (ADR-0039)."""
+
+    kind: str
+    target_legal_number: str
+    target_anchors: list[str] = field(default_factory=list)
+    replacement_anchors: list[str] = field(default_factory=list)
+    #: ISO, or None when the sentence stated no date behind an effectivity cue.
+    effective_from: str | None = None
+    evidence: str = ""
+    block_id: str | None = None
+    confidence: float = 0.0
+
+
+@dataclass
 class IdpOutcome:
     requires_ocr: bool
     kbdoc_ref: str | None = None
@@ -75,6 +90,9 @@ class IdpOutcome:
     effective_from: str | None = None
     effective_evidence: str | None = None
     detected_refs: list[DetectedRefOut] = field(default_factory=list)
+    #: Almost always empty: most instruments are not amendments. When it is not, this is the
+    #: declared-supersession path, and it is most of the problem (ADR-0039).
+    declarations: list[DeclarationOut] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     reason: str | None = None
     #: Scanned route only. Object-storage references to the rendered page images, in page

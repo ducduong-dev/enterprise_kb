@@ -106,6 +106,22 @@ class SupersessionBasis(StrEnum):
     STEWARD = "steward"
 
 
+class DeclarationState(StrEnum):
+    """Where a read declaration is between the sentence and the decision.
+
+    `WAITING` is the parked case — the instrument it declares against is not in the registry
+    yet, which is routine when an archive is digitised in whatever order it yields (ADR-0028).
+    `APPLIED` means the expiry ledger row and the supersession pointer both exist and this row
+    is history, kept because "who confirmed that Điều 12 was repealed, and on what sentence"
+    must be answerable from one table.
+    """
+
+    WAITING = "waiting"
+    OPEN = "open"
+    APPLIED = "applied"
+    REJECTED = "rejected"
+
+
 class SupersessionVerdict(StrEnum):
     """ADR-0033's four buckets. Four rather than a confidence score because `DIFFERENT_SCOPE`
     and `CONFLICTING_UNRESOLVED` are not weak instances of `SUPERSEDED` — they are different

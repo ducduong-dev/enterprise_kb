@@ -20,6 +20,7 @@ with workflow.unsafe.imports_passed_through():
     from kb_workflows.activities import (
         link_detected_refs,
         open_review_task,
+        record_declarations,
         register_ingest,
         run_idp,
         scan_pii,
@@ -96,6 +97,16 @@ class IngestWorkflow:
             )
         else:
             unresolved = []
+
+        if not registered.duplicate and idp.declarations:
+            # The declared-supersession path (ADR-0039). Recorded, never applied: these are
+            # readings of sentences, and a steward confirms them on the batch screen.
+            await workflow.execute_activity(
+                record_declarations,
+                args=[registered.document_id, idp.declarations],
+                start_to_close_timeout=_DB_TIMEOUT,
+                retry_policy=_RETRY,
+            )
 
         decision = decide(idp, registered, pii)
         task_id: str | None = None

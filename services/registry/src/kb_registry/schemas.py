@@ -8,6 +8,7 @@ the CRUD surface cannot be used to route around it.
 from __future__ import annotations
 
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from kb_schemas.enums import DocClass, DocStatus, PiiStatus, RefType, SourceType, Visibility
@@ -107,6 +108,22 @@ class VersionOut(BaseModel):
     is_canonical: bool
     retention_until: date | None
     created_at: datetime
+
+
+class DeclarationIn(BaseModel):
+    """A declaration the IDP read, on its way into the registry (ADR-0039)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["abrogates", "replaces", "amends"]
+    target_legal_number: str
+    target_anchors: list[str] = Field(default_factory=list)
+    replacement_anchors: list[str] = Field(default_factory=list)
+    effective_from: date | None = None
+    evidence: str
+    block_id: str | None = None
+    confidence: float = 0.0
+    detected_by: str = "idp"
 
 
 class DetectedRefIn(BaseModel):
