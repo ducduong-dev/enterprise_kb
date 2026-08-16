@@ -51,13 +51,37 @@ wait-healthy: ## Block until infrastructure health checks pass
 	done
 	@$(COMPOSE) ps
 
+.PHONY: restart
+restart: ## Rebuild and recreate the services — use this after changing code
+	# `docker compose restart` is the wrong verb for this repo: it stops and starts the
+	# *existing* container from the *existing* image, so a Python change or a compose edit is
+	# not picked up and the containers quietly drift behind the tree. `up -d --build` is what
+	# "restart after I changed something" actually means.
+	#
+	# Migrations run first, and against a database that is up, so new code never serves a
+	# request against a schema it is ahead of. `migrate` is idempotent, so this costs nothing
+	# when there is nothing to apply.
+	$(COMPOSE) up -d postgres
+	$(MAKE) wait-healthy
+	$(MAKE) migrate
+	$(COMPOSE) --profile services --profile models up -d --build
+	$(MAKE) wait-healthy
+	@echo 'Services rebuilt and running. Follow one with: make logs SVC=retrieval-api'
+
+.PHONY: bounce
+bounce: ## Restart the running containers without rebuilding (config-only changes)
+	# For when the image is right and only its input changed — a LiteLLM route, an env var
+	# already in `.env`. `ops/litellm` is mounted as a directory precisely so this suffices
+	# for a proxy config edit.
+	$(COMPOSE) --profile services --profile models restart
+
 .PHONY: down
 down: ## Stop everything (volumes preserved)
-	$(COMPOSE) --profile services --profile observability --profile gpu down
+	$(COMPOSE) --profile services --profile models --profile observability --profile gpu down
 
 .PHONY: clean
 clean: ## Stop everything and delete volumes — destroys local data
-	$(COMPOSE) --profile services --profile observability --profile gpu down -v
+	$(COMPOSE) --profile services --profile models --profile observability --profile gpu down -v
 
 .PHONY: logs
 logs: ## Tail logs (make logs SVC=retrieval-api)
