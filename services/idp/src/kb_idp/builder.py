@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from kb_schemas.kbdoc import (
     Block,
     BlockType,
+    DetectedDeclaration,
     DetectedRef,
     DocMeta,
     Engine,
@@ -28,6 +29,7 @@ from kb_vntext.dates import detect as detect_dates
 from kb_vntext.language import detect_language
 from kb_vntext.legal_numbers import extract_legal_numbers, find_anchors, guess_ref_type
 from kb_vntext.sections import SectionTracker
+from kb_vntext.supersession import find_declarations
 
 #: How many leading blocks are considered when looking for the document's own number.
 _HEADER_BLOCKS = 12
@@ -147,6 +149,7 @@ class KBDocBuilder:
             ),
             blocks=self._blocks,
             detected_refs=self._detect_refs(own_number),
+            declarations=self._detect_declarations(own_number),
             idp_report=IdpReport(
                 page_confidences=[
                     sum(values) / len(values)
@@ -186,6 +189,34 @@ class KBDocBuilder:
                 if standalone or _NUMBER_LABEL.search(preceding):
                     return number.value
         return None
+
+    def _detect_declarations(self, own_number: str | None) -> list[DetectedDeclaration]:
+        """What this document says it does to other instruments.
+
+        Read per block rather than over the joined text, so a declaration can be traced back to
+        the block a reviewer corrects it on — and because the closing article is one block in
+        practice, which is where nearly all of them live.
+        """
+        found: list[DetectedDeclaration] = []
+        for block in self._blocks:
+            if not block.text:
+                continue
+            for item in find_declarations(block.text, own_number=own_number):
+                found.append(
+                    DetectedDeclaration(
+                        kind=item.kind,
+                        target=item.target.value if item.target else None,
+                        target_anchors=list(item.target_anchors),
+                        replacement_anchors=list(item.replacement_anchors),
+                        effective_from=(
+                            item.effective_from.isoformat() if item.effective_from else None
+                        ),
+                        evidence=item.evidence,
+                        block_id=block.id,
+                        confidence=item.confidence,
+                    )
+                )
+        return found
 
     def _detect_refs(self, own_number: str | None) -> list[DetectedRef]:
         """Every instrument mentioned other than this document itself.

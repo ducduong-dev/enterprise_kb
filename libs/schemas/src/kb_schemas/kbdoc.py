@@ -95,6 +95,34 @@ class DetectedRef(BaseModel):
     confidence: float = 0.0
 
 
+class DetectedDeclaration(BaseModel):
+    """A sentence in which this document says what it does to another (ADR-0039).
+
+    Distinct from a `DetectedRef`, which records only that one instrument mentions another. A
+    declaration says *what* — ends it, replaces it, amends it — *which clauses*, and often *from
+    when*, all read from one sentence that is stored alongside so a steward can confirm it at a
+    glance rather than by opening the document.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["abrogates", "replaces", "amends"]
+    #: The instrument acted upon. Null when the sentence names none, which makes it a statement
+    #: about this document itself — a renumbering, and the merge flow's business.
+    target: str | None = None
+    #: Clauses of the target, dotted: "12", "12.2", "12.2a". Empty = the whole instrument.
+    target_anchors: list[str] = Field(default_factory=list)
+    #: Clauses of *this* document that take their place. Empty for a pure abrogation.
+    replacement_anchors: list[str] = Field(default_factory=list)
+    #: ISO date, only when the sentence states one behind an effectivity cue — never the issue
+    #: date that happens to sit beside the target's number.
+    effective_from: str | None = None
+    #: The sentence itself. The whole reason confirming a declaration is cheap.
+    evidence: str = ""
+    block_id: str | None = None
+    confidence: float = 0.0
+
+
 class IdpReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -112,6 +140,9 @@ class KBDoc(BaseModel):
     doc_meta: DocMeta
     blocks: list[Block] = Field(default_factory=list)
     detected_refs: list[DetectedRef] = Field(default_factory=list)
+    #: Almost always empty: most instruments are not amendments. When it is not, this is the
+    #: ~80% path — the corpus stating a supersession rather than us inferring one (ADR-0039).
+    declarations: list[DetectedDeclaration] = Field(default_factory=list)
     idp_report: IdpReport = Field(default_factory=IdpReport)
 
     def block(self, block_id: str) -> Block | None:
