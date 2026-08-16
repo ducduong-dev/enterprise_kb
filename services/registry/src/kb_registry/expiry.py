@@ -38,11 +38,11 @@ from kb_common.errors import Conflict, GateBlocked, NotFound, ValidationError
 from kb_common.logging import get_logger
 from kb_schemas.enums import NO_AUTOMATION_CLASSES, DocClass, ExpiryBasis, ExpiryState
 from kb_schemas.orm import DocumentExpiryRow, DocumentRow
-from kb_vntext.sections import anchor_families, anchor_matches
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from kb_registry import repository as repo
+from kb_registry.anchors import resolve_clauses
 
 log = get_logger(__name__)
 
@@ -371,42 +371,11 @@ class ExpiryLedger:
     ) -> list[uuid.UUID]:
         """The serving chunks a set of clause anchors names.
 
-        The same matching the reference resolver applies, from the same two functions, because
-        they ask one question of one column: a clause a reference resolves to and a clause a
-        partial expiry ends must be the same clause (ADR-0036).
-
-        Resolved in Python over `(id, anchor)` pairs rather than in SQL. A document has tens to
-        hundreds of chunks, so the read is trivial, and it means the matching rule has exactly
-        one implementation instead of one in each caller's WHERE clause.
+        Delegated so the expiry projection and the confirmation path resolve anchors exactly
+        one way — and the same way the read path does, through the matching functions in
+        `kb_vntext.sections` (ADR-0036).
         """
-        families = anchor_families(anchors)
-        if not families:
-            return []
-        rows = self._session.execute(
-            text(
-                "SELECT id, anchor FROM chunks "
-                "WHERE document_id = :doc AND NOT tombstoned AND anchor IS NOT NULL"
-            ),
-            {"doc": document_id},
-        ).all()
-
-        under: dict[str, list[uuid.UUID]] = {}
-        exact: dict[str, list[uuid.UUID]] = {}
-        for row in rows:
-            for family in families:
-                if anchor_matches(row.anchor, family):
-                    under.setdefault(family, []).append(row.id)
-            exact.setdefault(str(row.anchor), []).append(row.id)
-
-        found: list[uuid.UUID] = []
-        for anchor in anchors:
-            # Clause → article fallback, and only to a chunk anchored at the article exactly:
-            # the merged-clause case. Never to the article's other clauses, which a reference
-            # to khoản 2 does not name and an expiry of khoản 2 must not end.
-            for chunk_id in under.get(anchor) or exact.get(anchor.split(".")[0]) or []:
-                if chunk_id not in found:
-                    found.append(chunk_id)
-        return found
+        return [clause.chunk_id for clause in resolve_clauses(self._session, document_id, anchors)]
 
     # ---------------------------------------------------------------------- the detectors
 
