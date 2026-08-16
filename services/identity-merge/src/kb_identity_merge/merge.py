@@ -34,7 +34,7 @@ log = get_logger(__name__)
 PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts"
 CLASSIFIER_PROMPT = PROMPT_DIR / "merge_classifier.md"
 DRAFTER_PROMPT = PROMPT_DIR / "merge_drafter.md"
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 
 #: Sections whose text is long enough that drafting them costs real tokens are still drafted
 #: one at a time; this caps a runaway document rather than the normal case.
@@ -158,37 +158,44 @@ class MergeDrafter:
 
     def _classify(self, changes: list[SectionChange]) -> tuple[list[SectionClassification], bool]:
         payload = "\n\n".join(
-            f"### {change.section_path} ({change.kind.value})\n"
+            f"### [{index}] {change.section_path} ({change.kind.value})\n"
             f"Văn bản gốc:\n{change.old_text or '(không có)'}\n"
             f"Văn bản sửa đổi:\n{change.new_text or '(bị bãi bỏ)'}"
-            for change in changes
+            for index, change in enumerate(changes)
         )
         try:
             verdict = self._ask(self._classifier.replace("{sections}", payload), max_tokens=2048)
+            # Inside the try on purpose: a reply the indices cannot be read from is a failed
+            # call, and fails the same way a reply that was not JSON does (ADR-0034).
+            by_index = _index_verdicts(verdict.get("sections", []) or [], len(changes))
         except Exception as exc:
             log.warning("merge_classifier_failed", extra={"error": str(exc)})
             return [_from_diff(change) for change in changes], False
 
-        by_path = {
-            str(item.get("section_path")): item for item in verdict.get("sections", []) or []
-        }
         classifications: list[SectionClassification] = []
-        for change in changes:
-            item = by_path.get(change.section_path)
+        for index, change in enumerate(changes):
+            item = by_index.get(index)
             if item is None:
-                # The model skipped a section. The diff's own verdict stands in, flagged, so
-                # the reviewer knows this one was not classified rather than silently omitted.
+                # The model skipped a section — and now we *know* it did, rather than
+                # inferring it from a lookup that could also have missed on a retyped path.
+                # The diff's own verdict stands in, flagged, so the reviewer sees it was not
+                # classified rather than silently omitted.
                 classifications.append(_from_diff(change))
                 continue
             classifications.append(
                 SectionClassification(
+                    # The caller owns the mapping. The model never retypes a section path, so
+                    # nothing about an OCR'd heading can break it.
                     section_path=change.section_path,
                     bucket=_bucket(str(item.get("bucket", ""))),
                     impact=str(item.get("impact", "")),
                     confidence=float(item.get("confidence", 0.0) or 0.0),
                 )
             )
-        return classifications, len(by_path) >= len(changes)
+        # Every index answered exactly once, or the draft is not complete. Duplicates and
+        # out-of-range indices never reach here, so this is a count of real answers rather
+        # than of items the model returned.
+        return classifications, len(by_index) == len(changes)
 
     def _draft_sections(self, changes: list[SectionChange]) -> tuple[list[DraftedSection], bool]:
         drafted: list[DraftedSection] = []
@@ -254,6 +261,32 @@ class MergeDrafter:
             raise ValueError("model did not return JSON")
         parsed: dict[str, Any] = json.loads(match.group(0))
         return parsed
+
+
+def _index_verdicts(items: Any, count: int) -> dict[int, dict[str, Any]]:
+    """Map the model's verdicts onto the list it was given, by index (ADR-0034).
+
+    Raises on anything that means the model lost the alignment: an index outside the list, an
+    index answered twice, or a verdict carrying no index at all. None of those is repaired and
+    none is dropped — a model that answers about item 7 of a five-item list did not understand
+    the question, and its other four answers are not evidence that it did.
+    """
+    if not isinstance(items, list):
+        raise ValueError("sections must be a list")
+    by_index: dict[int, dict[str, Any]] = {}
+    for item in items:
+        if not isinstance(item, dict) or item.get("idx") is None:
+            raise ValueError("a verdict arrived with no index")
+        try:
+            index = int(item["idx"])
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"non-numeric index {item['idx']!r}") from exc
+        if not 0 <= index < count:
+            raise ValueError(f"index {index} is outside the {count}-section list")
+        if index in by_index:
+            raise ValueError(f"index {index} was answered twice")
+        by_index[index] = item
+    return by_index
 
 
 def _from_diff(change: SectionChange) -> SectionClassification:

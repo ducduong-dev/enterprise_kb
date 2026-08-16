@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from kb_identity_merge.diff import ChangeKind, diff_documents, word_diff
+from kb_identity_merge.diff import ChangeKind, DocumentDiff, diff_documents, word_diff
 from kb_identity_merge.matching import Candidate, MatchDecision, match
 from kb_identity_merge.merge import Bucket, MergeDrafter
 from kb_idp.builder import KBDocBuilder
@@ -207,7 +207,7 @@ def classifier_response() -> str:
         {
             "sections": [
                 {
-                    "section_path": "Chương II > Điều 6",
+                    "idx": 0,
                     "bucket": "amended",
                     "impact": "Tỷ lệ an toàn vốn tối thiểu tăng từ 8% lên 10%.",
                     "confidence": 0.94,
@@ -256,7 +256,7 @@ def test_an_added_article_needs_no_model_call() -> None:
                 {
                     "sections": [
                         {
-                            "section_path": "Chương II > Điều 12a",
+                            "idx": 0,
                             "bucket": "new_or_abrogated",
                             "impact": "Bổ sung quy định chuyển tiếp.",
                             "confidence": 0.9,
@@ -319,7 +319,7 @@ def test_an_unrecognised_bucket_is_treated_as_substantive() -> None:
                 {
                     "sections": [
                         {
-                            "section_path": "Chương II > Điều 6",
+                            "idx": 0,
                             "bucket": "probably fine",
                             "impact": "",
                             "confidence": 0.9,
@@ -332,6 +332,143 @@ def test_an_unrecognised_bucket_is_treated_as_substantive() -> None:
     )
     draft = MergeDrafter(model).draft(diff_documents(circular(ORIGINAL), circular(AMENDED)))
     assert draft.classifications[0].bucket is Bucket.AMENDED
+
+
+# --------------------------------------------------------- indexed model I/O (ADR-0034)
+
+
+def _classifier_reply(*sections: dict[str, object]) -> str:
+    return json.dumps({"sections": list(sections)})
+
+
+def test_the_classifier_numbers_the_sections_it_sends() -> None:
+    """The paths stay in the prompt as labels; the index is what the answer travels on."""
+    model = ScriptedGeneration(responses=[classifier_response(), drafter_response()])
+    MergeDrafter(model).draft(diff_documents(circular(ORIGINAL), circular(AMENDED)))
+
+    classifier_prompt = model.calls[0][0].content
+    assert "[0] Chương II > Điều 6" in classifier_prompt
+
+
+def test_a_retyped_section_path_no_longer_loses_a_classification() -> None:
+    """The v1 failure: the model re-types the path, the lookup misses, and a real verdict is
+    thrown away as though the section had never been classified."""
+    model = ScriptedGeneration(
+        responses=[
+            _classifier_reply(
+                {
+                    "idx": 0,
+                    "section_path": "Chuong II, dieu 6",  # diacritics dropped, as OCR does
+                    "bucket": "unchanged_in_substance",
+                    "impact": "Chỉ thay đổi cách diễn đạt.",
+                    "confidence": 0.8,
+                }
+            ),
+            drafter_response(),
+        ]
+    )
+    draft = MergeDrafter(model).draft(diff_documents(circular(ORIGINAL), circular(AMENDED)))
+
+    assert draft.classifications[0].bucket is Bucket.UNCHANGED_IN_SUBSTANCE
+    assert not draft.classifications[0].inferred
+    assert draft.classifications[0].section_path == "Chương II > Điều 6"
+    assert draft.complete
+
+
+def test_an_out_of_range_index_fails_the_whole_call() -> None:
+    """Not dropped and not repaired: a model that answers about item 7 of a one-item list did
+    not understand the question, and its other answers are not evidence that it did."""
+    model = ScriptedGeneration(
+        responses=[
+            _classifier_reply(
+                {"idx": 0, "bucket": "unchanged_in_substance", "impact": "", "confidence": 0.9},
+                {"idx": 7, "bucket": "amended", "impact": "", "confidence": 0.9},
+            ),
+            drafter_response(),
+        ]
+    )
+    draft = MergeDrafter(model).draft(diff_documents(circular(ORIGINAL), circular(AMENDED)))
+
+    assert not draft.complete
+    assert all(item.inferred for item in draft.classifications)
+    # And conservatively: the in-range verdict said "cosmetic", which is not what the reviewer
+    # is shown, because the call it arrived in failed.
+    assert draft.classifications[0].bucket is Bucket.AMENDED
+
+
+def test_a_duplicated_index_fails_the_whole_call() -> None:
+    model = ScriptedGeneration(
+        responses=[
+            _classifier_reply(
+                {"idx": 0, "bucket": "unchanged_in_substance", "impact": "", "confidence": 0.9},
+                {"idx": 0, "bucket": "amended", "impact": "", "confidence": 0.9},
+            ),
+            drafter_response(),
+        ]
+    )
+    draft = MergeDrafter(model).draft(diff_documents(circular(ORIGINAL), circular(AMENDED)))
+
+    assert not draft.complete
+    assert draft.classifications[0].inferred
+
+
+def test_a_verdict_with_no_index_fails_the_call() -> None:
+    """v1's silent-corruption case: an item matching nothing sat in the map, inflating the
+    count that `complete` was computed from."""
+    model = ScriptedGeneration(
+        responses=[
+            _classifier_reply({"bucket": "amended", "impact": "", "confidence": 0.9}),
+            drafter_response(),
+        ]
+    )
+    draft = MergeDrafter(model).draft(diff_documents(circular(ORIGINAL), circular(AMENDED)))
+
+    assert not draft.complete
+    assert draft.classifications[0].inferred
+
+
+def _two_section_diff() -> DocumentDiff:
+    diff = diff_documents(circular(ORIGINAL), circular(AMENDED, extra="Áp dụng từ 01/01/2027."))
+    assert len(diff.changed) == 2, "fixture must offer the model two sections to answer about"
+    return diff
+
+
+def test_a_skipped_index_is_a_detected_omission_not_a_lost_answer() -> None:
+    """The verdict the model did give survives; only the one it omitted falls back."""
+    model = ScriptedGeneration(
+        responses=[
+            _classifier_reply(
+                {"idx": 1, "bucket": "new_or_abrogated", "impact": "", "confidence": 0.9}
+            ),
+            drafter_response(),
+        ]
+    )
+    draft = MergeDrafter(model).draft(_two_section_diff())
+
+    assert not draft.complete
+    assert draft.classifications[0].inferred
+    assert not draft.classifications[1].inferred
+    assert draft.classifications[1].bucket is Bucket.NEW_OR_ABROGATED
+
+
+def test_completeness_counts_answers_not_items_returned() -> None:
+    """v1's corrupted honesty signal, exactly: a reply that names one real section and one
+    imaginary one, while omitting a real section, counted as two answers over two changes and
+    reported `complete=True`. `MergeDraft.complete` exists to tell a reviewer the draft is
+    partial, and in that case it said the opposite."""
+    model = ScriptedGeneration(
+        responses=[
+            _classifier_reply(
+                {"idx": 1, "bucket": "unchanged_in_substance", "impact": "", "confidence": 0.9},
+                {"idx": 5, "bucket": "unchanged_in_substance", "impact": "", "confidence": 0.9},
+            ),
+            drafter_response(),
+        ]
+    )
+    draft = MergeDrafter(model).draft(_two_section_diff())
+
+    assert not draft.complete
+    assert all(item.inferred for item in draft.classifications)
 
 
 def test_a_document_with_no_changes_needs_no_model_at_all() -> None:
