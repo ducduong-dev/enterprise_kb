@@ -260,3 +260,43 @@ def _environment(service: str) -> dict[str, str]:
     if isinstance(raw, list):  # pragma: no cover - the file uses mapping form
         return dict(item.split("=", 1) for item in raw)
     return {key: str(value) for key, value in raw.items()}
+
+
+def test_the_proxy_config_is_mounted_as_a_directory() -> None:
+    """A single-file bind mount pins an inode, and every editor that saves by write-then-rename
+    gives the file a new one — so the container serves the config from before the edit and a
+    restart does not fix it, because the mount still points at the old inode."""
+    mounts = COMPOSE["services"]["litellm"]["volumes"]
+    assert any(str(m).startswith("./ops/litellm:") for m in mounts), mounts
+    assert not any("config.yaml:" in str(m) for m in mounts), (
+        "mount the directory; a file mount goes stale on the first edit"
+    )
+
+
+def test_no_route_falls_back_to_itself() -> None:
+    """A fallback to the same alias is not a safety net: it retries the same dead route and
+    doubles the error. And the rule that matters when a second route is added — never fall back
+    from an on-premises model to a public one, which turns an outage into an unreviewed
+    disclosure ([OPEN]-1)."""
+    config = yaml.safe_load((ROOT / "ops" / "litellm" / "config.yaml").read_text(encoding="utf-8"))
+    for entry in config["litellm_settings"].get("fallbacks") or []:
+        for alias, targets in entry.items():
+            assert alias not in targets, f"{alias} falls back to itself"
+
+
+def test_the_reasoning_model_has_thinking_turned_off() -> None:
+    """Qwen3.5 bills its reasoning trace against the same `max_tokens` as the answer, so a
+    budget exhausted mid-trace truncates the answer or empties it. Measured through the proxy:
+    800 tokens and a cut-off answer with thinking on, 52 and a complete one without.
+
+    Asserted on `extra_body` specifically. `allowed_openai_params: ["chat_template_kwargs"]`
+    looks equivalent and breaks every request — LiteLLM forwards the key as a keyword argument
+    to the OpenAI SDK client, which rejects it as unexpected.
+    """
+    config = yaml.safe_load((ROOT / "ops" / "litellm" / "config.yaml").read_text(encoding="utf-8"))
+    generation = next(m for m in config["model_list"] if m["model_name"] == "kb-generation")
+    params = generation["litellm_params"]
+    assert "allowed_openai_params" not in params, (
+        "this breaks every request to the alias; use extra_body"
+    )
+    assert params["extra_body"]["chat_template_kwargs"]["enable_thinking"] is False

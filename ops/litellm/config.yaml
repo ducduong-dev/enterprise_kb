@@ -9,40 +9,96 @@
 # routes below that leave the network, and the platform refuses those until Compliance has
 # ruled ([OPEN]-1) — so this file and that setting are meant to be reviewed together.
 
+# The three on-premises models are served by vLLM from the GPU stack in
+# `../vllm-rag-stack`, reached by container name over the external `kb-models` network. Only
+# this proxy joins that network, so ADR-0024's single egress is a routing fact rather than a
+# convention everyone has to remember.
+#
+# The `model:` after the provider prefix must be vLLM's `--served-model-name`, not the
+# HuggingFace path it was loaded from. vLLM matches the served name and 404s on anything else,
+# and the failure reads as "model not found" rather than "you named it wrong".
+
 model_list:
   # ------------------------------------------------------------------ on-premises (default)
   - model_name: kb-generation
     litellm_params:
-      model: openai/Qwen/Qwen2.5-32B-Instruct
-      api_base: http://vllm-generation:8000/v1
+      model: openai/qwen3.5-9b
+      api_base: http://qwen35-9b:8000/v1
       api_key: not-needed        # vLLM does not check it; LiteLLM requires the field
+      extra_body:
+        chat_template_kwargs:
+          enable_thinking: false
+      # Qwen3.5 is a reasoning model and vLLM serves it with `--reasoning-parser=qwen3`, so
+      # thinking is ON by default. The trace is generated before the answer and billed against
+      # the same `max_tokens`, which makes it a correctness problem rather than a cost one:
+      # exhaust the budget mid-trace and the reply is a 200 whose answer is truncated, or
+      # absent entirely with `content: null` and `finish_reason: "length"`.
+      #
+      # Measured through this proxy on a Vietnamese RAG prompt at max_tokens=800:
+      #   thinking on  → 800 completion tokens, finish_reason "length", answer cut mid-sentence
+      #   thinking off →  52 completion tokens, finish_reason "stop",   answer complete
+      #
+      # Every generation call the platform makes is extraction-shaped and budget-bound — a
+      # grounded answer, a query condensation, a merge classification, a PII judgement — so
+      # thinking is off here rather than left to each caller to remember.
+      #
+      # It lives in the config and not in the services because it is a fact about *this
+      # checkpoint*, and ADR-0024's whole split is that services know roles while the proxy
+      # knows providers. Swap in a non-reasoning model and this line goes, with no service
+      # touched.
+      #
+      # `extra_body` is the mechanism that works. `allowed_openai_params:
+      # ["chat_template_kwargs"]` looks right and is not: it makes LiteLLM forward the key as a
+      # keyword argument to the OpenAI SDK client, which rejects it as unexpected — and it
+      # does so on *every* request, including the ones that never send the param. That failure
+      # is total and immediate, so it is worth naming here rather than rediscovering.
     model_info:
       mode: chat
-
-  - model_name: kb-vlm
-    litellm_params:
-      model: openai/Qwen/Qwen2.5-VL-7B-Instruct
-      api_base: http://vllm-vlm:8000/v1
-      api_key: not-needed
-    model_info:
-      mode: chat
-      supports_vision: true
 
   - model_name: kb-embedding
     litellm_params:
-      model: openai/BAAI/bge-m3
-      api_base: http://embeddings:80/v1
+      model: openai/bge-m3
+      api_base: http://bge-m3-embed:8000/v1
       api_key: not-needed
     model_info:
       mode: embedding
 
   - model_name: kb-rerank
     litellm_params:
-      model: infinity/BAAI/bge-reranker-v2-m3
-      api_base: http://reranker:80
+      # vLLM's pooling runner exposes a Jina/Cohere-shaped `/rerank`, which is what the
+      # `jina_ai` provider speaks. Not `openai/` — OpenAI has no rerank endpoint — and not
+      # `infinity/`, which was the previous backend's protocol.
+      model: jina_ai/bge-reranker-v2-m3
+      api_base: http://bge-reranker:8000
       api_key: not-needed
     model_info:
       mode: rerank
+
+  # ---------------------------------------------------------------- declared, not yet served
+  #
+  # The role stays declared because the platform asks for it by name and a role that vanishes
+  # from this file fails at the first scanned page rather than here. But **nothing serves it
+  # today**: the GPU stack runs an embedder, a reranker and Qwen3.5-9B, which is a text-only
+  # checkpoint. There is no vLLM container behind this address.
+  #
+  # What that costs, until there is: M3's escalation path (ADR-0025 — a vision model may read
+  # every page) has no backend. `VlmPort` falls back to its recorded adapter, low-confidence
+  # scanned pages are not re-read, and the confidence numbers in an IDP report are PaddleOCR's
+  # alone. Digital-native documents are unaffected.
+  #
+  # Two ways out, both decisions rather than defaults:
+  #   * add a VL checkpoint to the GPU stack — it has about 3.9GB spare, which will not fit a
+  #     7B VL model beside the three already resident without evicting one of them;
+  #   * route this alias to a public vision model, which is the scanned document itself
+  #     leaving the building. That is `[OPEN]`-1, and it is deliberately not a default.
+  - model_name: kb-vlm
+    litellm_params:
+      model: openai/Qwen2.5-VL-7B-Instruct
+      api_base: http://vllm-vlm:8000/v1
+      api_key: not-needed
+    model_info:
+      mode: chat
+      supports_vision: true
 
   # ---------------------------------------------------------------------- public providers
   #
@@ -79,10 +135,13 @@ litellm_settings:
   drop_params: true            # a provider that lacks a parameter should not fail the call
   request_timeout: 120
   num_retries: 2
-  # Fall back to the on-premises model rather than failing a request outright. The order is
-  # deliberate: a public fallback would turn an outage into an unreviewed disclosure.
-  fallbacks:
-    - kb-generation: [kb-generation]
+  # No fallbacks. There is one generation model, so there is nowhere to fall back *to*, and
+  # `kb-generation: [kb-generation]` — which is what stood here — is not a safety net: it
+  # retries the same dead route and doubles the error message.
+  #
+  # The rule to keep when a second route is added: never fall back from an on-premises model to
+  # a public one. That turns an outage into an unreviewed disclosure, which is the one failure
+  # mode worse than the outage ([OPEN]-1, ADR-0025).
 
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

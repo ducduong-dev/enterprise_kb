@@ -114,15 +114,57 @@ def clean_test_data(migrated: Engine) -> Engine:
 
 
 @pytest.fixture
-def pristine_corpus(seeded: Engine) -> Engine:
+def pristine_corpus(seeded: Engine) -> Iterator[Engine]:
     """The seeded corpus and nothing else, at the moment this test runs.
 
     The quality gates measure retrieval and answers against a known corpus. Tests that commit
     their own fixtures earlier in the same session would otherwise sit in the index competing
     for the top of every result list, and the gate would fail — or worse, pass — for reasons
     that have nothing to do with the change under test.
+
+    Purging by category prefix handles the tests' own leftovers and cannot handle the other
+    source: **real documents uploaded through the portal**, which land in the same categories
+    the fixtures live in. On a developer's machine that is normal and desirable — it is what
+    the platform is for — and it silently invalidates every ranking threshold.
+
+    So the rest are *hidden* rather than deleted. Tombstoning puts them outside the ACL
+    predicate, which is inside the query, so retrieval genuinely cannot see them and the
+    measurement stays honest — a post-filter over results would hide a real ranking failure
+    instead of measuring it. Nothing is destroyed: the documents, versions and chunk rows are
+    untouched, and exactly the rows this fixture hid are restored afterwards.
     """
-    return purge_test_documents(seeded)
+    from scripts.seed import fixture_document_ids
+
+    engine = purge_test_documents(seeded)
+    with Session(engine) as session:
+        hidden = [
+            row[0]
+            for row in session.execute(
+                text(
+                    "SELECT id FROM chunks WHERE NOT tombstoned "
+                    "AND document_id <> ALL(CAST(:keep AS uuid[]))"
+                ),
+                {"keep": [str(item) for item in fixture_document_ids()]},
+            )
+        ]
+        if hidden:
+            session.execute(
+                text("UPDATE chunks SET tombstoned = TRUE WHERE id = ANY(CAST(:ids AS uuid[]))"),
+                {"ids": [str(item) for item in hidden]},
+            )
+            session.commit()
+    try:
+        yield engine
+    finally:
+        if hidden:
+            with Session(engine) as session:
+                session.execute(
+                    text(
+                        "UPDATE chunks SET tombstoned = FALSE WHERE id = ANY(CAST(:ids AS uuid[]))"
+                    ),
+                    {"ids": [str(item) for item in hidden]},
+                )
+                session.commit()
 
 
 @pytest.fixture

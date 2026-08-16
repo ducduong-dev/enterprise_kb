@@ -240,7 +240,7 @@ services:
 
   litellm:
     image: ghcr.io/berriai/litellm:main-stable
-    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    command: ["--config", "/app/litellm/config.yaml", "--port", "4000"]
     environment:
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:-sk-kb-dev}
       LITELLM_DATABASE_URL: postgresql://${KB_DB_USER:-kb}:${KB_DB_PASSWORD:-kb}@postgres:5432/litellm
@@ -248,14 +248,22 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
     volumes:
-      - ./ops/litellm/config.yaml:/app/config.yaml:ro
+      # The *directory*, not the file. A single-file bind mount pins an inode, and every editor
+      # that saves by write-then-rename gives the file a new one — so the container keeps
+      # serving the config from before the edit, and a restart does not fix it because the
+      # mount still points at the old inode. Mounting the directory means the container
+      # resolves the name each time, and `docker compose restart litellm` picks up the change.
+      - ./ops/litellm:/app/litellm:ro
     ports: ["4000:4000"]
     depends_on:
       postgres:
         condition: service_healthy
     # The DMZ reaches the proxy over `dmz-models` and nothing else on the platform network.
     # A public answer still needs a model; a public process still must not see the portal.
-    networks: [default, dmz-models]
+    #
+    # `models` is where the GPU node is, and this is the only service on it: everything else
+    # reaches a model by asking the proxy, because it has no route to one otherwise (ADR-0024).
+    networks: [default, dmz-models, models]
     healthcheck:
       # The image has no curl.
       test:
@@ -437,3 +445,15 @@ networks:
   # traffic goes (ADR-0024).
   dmz-models:
     name: kb-dmz-models
+  # Where the GPU node lives. Declared external because the model servers are a separate
+  # deployment with their own lifecycle — they outlive a `compose down` here, and on a real
+  # GPU host they are not this compose file's to start or stop.
+  #
+  # Only `litellm` joins it. That is the point of ADR-0024 stated as a network fact rather than
+  # a convention: a service that wanted to call a model directly could not reach one, so the
+  # proxy is the single egress by construction and not by everyone remembering.
+  #
+  #   docker network create kb-models
+  models:
+    name: kb-models
+    external: true

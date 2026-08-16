@@ -85,6 +85,44 @@ def test_generation_asks_the_proxy_for_its_model_alias() -> None:
     assert recorder.requests[-1].headers["authorization"] == "Bearer sk-proxy"
 
 
+def test_a_reasoning_model_that_ran_out_of_room_yields_an_empty_answer() -> None:
+    """A 200 with `content: null`.
+
+    Qwen3.5 generates its reasoning trace before the answer and bills both against the same
+    `max_tokens`, so a budget exhausted mid-trace comes back successful and empty. Left as
+    None it would be an AttributeError deep in the answer path — `verify` and the merge
+    classifier both call string methods on it — instead of the refusal an answer with no
+    citation is supposed to become (ADR-0018).
+    """
+    cfg = settings()
+    recorder = Recorder(
+        {
+            "model": "kb-generation",
+            "choices": [{"message": {"content": None}, "finish_reason": "length"}],
+            "usage": {"prompt_tokens": 900, "completion_tokens": 800},
+        }
+    )
+    adapter = OpenAiCompatibleGeneration(cfg, client=recorder.client(cfg))
+    result = adapter.generate([Message(role="user", content="tỷ lệ?")])
+
+    assert result.text == ""
+    # Carried through, so a caller can tell "nothing to say" from "ran out of room" — which
+    # are the same empty string otherwise, and only one of them is worth raising the budget for.
+    assert result.finish_reason == "length"
+    assert result.completion_tokens == 800
+
+
+def test_a_message_with_no_content_key_at_all_is_still_an_empty_answer() -> None:
+    """Some providers omit the key rather than sending null. Same outcome either way."""
+    cfg = settings()
+    recorder = Recorder(
+        {"model": "kb-generation", "choices": [{"message": {}, "finish_reason": "stop"}]}
+    )
+    adapter = OpenAiCompatibleGeneration(cfg, client=recorder.client(cfg))
+
+    assert adapter.generate([Message(role="user", content="?")]).text == ""
+
+
 def test_generation_records_where_it_ran() -> None:
     cfg = settings()
     adapter = OpenAiCompatibleGeneration(cfg, client=Recorder({}).client(cfg))

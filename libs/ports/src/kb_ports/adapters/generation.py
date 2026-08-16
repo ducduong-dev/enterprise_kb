@@ -104,8 +104,20 @@ class OpenAiCompatibleGeneration:
         body = response.json()
         choice = body["choices"][0]
         usage = body.get("usage", {})
+        # `content` can be null on a 200. A reasoning model generates its trace before the
+        # answer and bills both against the same `max_tokens`, so a budget exhausted mid-trace
+        # returns `finish_reason: "length"` with nothing in `content` — an empty answer, not an
+        # error, and the caller cannot tell the difference from a model that had nothing to say.
+        #
+        # Coerced to a string here rather than defended against downstream: `verify` and the
+        # merge classifier both call string methods on this, and a None would be an
+        # AttributeError deep in the answer path instead of the refusal it should be. An empty
+        # answer produces no citations, so it becomes a refusal on its own (ADR-0018).
+        #
+        # `finish_reason` is carried through so a caller that cares can tell "nothing to say"
+        # from "ran out of room", which are the same empty string otherwise.
         return Generation(
-            text=choice["message"]["content"],
+            text=choice["message"].get("content") or "",
             prompt_tokens=int(usage.get("prompt_tokens", 0)),
             completion_tokens=int(usage.get("completion_tokens", 0)),
             finish_reason=str(choice.get("finish_reason", "stop")),

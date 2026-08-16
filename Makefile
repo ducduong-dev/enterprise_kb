@@ -117,13 +117,19 @@ check-drift: ## Fail if the ORM and the migrations disagree
 
 # ----------------------------------------------------------------------------------- checks
 
+# `.env` is what `docker compose` reads, and the settings class does not: pydantic reads real
+# environment variables. Without this, a test run on the host silently falls back to the
+# in-container defaults — `http://litellm:4000`, which resolves nowhere — and the failures read
+# as broken code rather than as an unset variable.
+ENVRC = set -a; [ -f .env ] && . ./.env; set +a;
+
 .PHONY: test
 test: ## Unit tests (no infrastructure required)
-	$(UV) run pytest -m "not integration"
+	$(ENVRC) $(UV) run pytest -m "not integration"
 
 .PHONY: test-all
 test-all: ## Every test, including those needing live infrastructure
-	$(UV) run pytest
+	$(ENVRC) $(UV) run pytest
 
 .PHONY: acl-sweep
 acl-sweep: ## The blocking ACL invariant sweep (INV-2/3/4/10)

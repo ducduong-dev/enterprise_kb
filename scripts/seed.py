@@ -25,7 +25,6 @@ from kb_schemas.enums import DocClass, DocStatus, PiiStatus, RefType, SourceType
 from kb_schemas.orm import (
     CategoryRow,
     ChunkRow,
-    DocumentRefRow,
     DocumentRow,
     DocumentVersionRow,
     GraphServingRow,
@@ -329,20 +328,50 @@ def seed_document(session: Session, doc: SeedDoc, retention_years: int) -> None:
         )
 
 
+def fixture_document_ids() -> frozenset[uuid.UUID]:
+    """Every document this script owns.
+
+    The quality gates measure retrieval against a *known* corpus, and a dev database is not a
+    clean one — real documents get uploaded through the portal into the same categories the
+    fixtures live in, and they then compete for the top of every result list. Purging by
+    category prefix cannot separate them, because they share the categories.
+
+    Derivable rather than recorded because `sid` is deterministic: this is the same set the
+    seeder writes, computed the same way, so the two cannot drift.
+    """
+    return frozenset(sid(f"doc:{doc.key}") for doc in DOCS + CANARIES)
+
+
 def seed_edges(session: Session) -> None:
     for src_key, dst_key, ref_type in EDGES:
         src, dst = sid(f"doc:{src_key}"), sid(f"doc:{dst_key}")
-        session.merge(
-            DocumentRefRow(
-                id=sid(f"edge:{src_key}:{dst_key}:{ref_type.value}"),
-                src_document_id=src,
-                dst_document_id=dst,
-                ref_type=ref_type.value,
-                articles=None,
-                detected_by="seed",
-                confirmed_by="seed",
-                created_at=datetime.now(UTC),
-            )
+        # Upsert on the *natural* key, not the surrogate one. `session.merge` matches by
+        # primary key, and an edge between the same two documents can already exist under a
+        # different id — ingest mints `uuid4`, and `resolve_pending_refs` promotes a parked
+        # reference the same way. Seeding then died on `uq_refs_edge` and the corpus could
+        # only be restored by dropping the volume, which is why these fixtures drifted.
+        #
+        # DO UPDATE rather than DO NOTHING: seeding is a declaration of what the fixture
+        # corpus *is*, so it takes ownership of an edge ingest guessed at.
+        session.execute(
+            text(
+                """
+                INSERT INTO document_refs (id, src_document_id, dst_document_id, ref_type,
+                    articles, anchors, detected_by, confirmed_by, created_at)
+                VALUES (:id, :src, :dst, CAST(:ref_type AS ref_type),
+                    NULL, NULL, 'seed', 'seed', :created_at)
+                ON CONFLICT (src_document_id, dst_document_id, ref_type) DO UPDATE
+                SET detected_by = EXCLUDED.detected_by,
+                    confirmed_by = EXCLUDED.confirmed_by
+                """
+            ),
+            {
+                "id": sid(f"edge:{src_key}:{dst_key}:{ref_type.value}"),
+                "src": src,
+                "dst": dst,
+                "ref_type": ref_type.value,
+                "created_at": datetime.now(UTC),
+            },
         )
         target = next(d for d in DOCS + CANARIES if d.key == dst_key)
         # graph_serving carries the target's ACL so expansion filters identically (INV-10).
