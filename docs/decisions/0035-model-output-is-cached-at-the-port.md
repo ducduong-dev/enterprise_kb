@@ -1,6 +1,7 @@
 # ADR-0035 — Model output is cached at the port, keyed by the prompt that produced it
 
-**Status:** proposed · **Date:** 2026-08-13
+**Status:** accepted · **Date:** 2026-08-13 · **Implemented:** 2026-08-16
+(`kb_ports.adapters.generation_cached`, migration 0011).
 
 ## Context
 
