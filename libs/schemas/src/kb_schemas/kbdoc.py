@@ -42,6 +42,13 @@ class DocMeta(BaseModel):
     #: The sentence `effective_from` was read from, so a reviewer can check it without opening
     #: the document.
     effective_evidence: str | None = None
+    #: ISO date of the last day the instrument applies, when it states its own sunset —
+    #: a fee schedule with a window on its face. Almost always `None`: expiry normally arrives
+    #: later from another instrument, and that is a ledger decision, not a version fact
+    #: (ADR-0030). Read then confirmed, exactly like `effective_from`.
+    effective_to: str | None = None
+    #: The sentence `effective_to` was read from.
+    expiry_evidence: str | None = None
 
 
 class Table(BaseModel):
@@ -80,6 +87,10 @@ class DetectedRef(BaseModel):
     raw: str
     legal_number: str | None = None
     ref_type_guess: str = "cites"
+    #: Which clauses of the cited instrument this reference names, in the dotted form the
+    #: target's chunks carry — "12", "12.2", "12.2a". Empty means the whole instrument, which
+    #: is what "theo quy định tại Thông tư 41/2016" cites (ADR-0036).
+    anchors: list[str] = Field(default_factory=list)
     block_id: str | None = None
     confidence: float = 0.0
 

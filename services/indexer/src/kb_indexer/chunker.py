@@ -19,11 +19,34 @@ Consequences of that choice, handled here:
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 
 from kb_schemas.kbdoc import Block, KBDoc
-from kb_vntext.sections import build_citation_label
+from kb_vntext.language import fold_diacritics
+from kb_vntext.sections import build_anchor, build_citation_label
+
+_ARTICLE = re.compile(r"(?:Điều|Article)\s+(\d+)", re.IGNORECASE)
+_WORD = re.compile(r"[^\W_]+", re.UNICODE)
+#: Structural labels and instrument boilerplate. Diacritic-folded, because that is the form
+#: `subject_key` compares in. Shares its purpose with `matching._TITLE_STOPWORDS`, which does
+#: the same job for document titles.
+_SUBJECT_STOPWORDS = frozenset(
+    {
+        # Structural labels: they say what the clause *is*, never what it is about.
+        "chuong", "muc", "dieu", "khoan", "diem", "phu", "luc", "phan",
+        "chapter", "section", "article", "clause", "point", "part", "annex",
+        # Instrument boilerplate. Every Vietnamese instrument opens with these.
+        "thong", "tu", "nghi", "dinh", "quyet", "quy", "che", "trinh", "hanh",
+        # Function words. "cho vay" keeps `vay`, which is the half that carries the subject.
+        "ve", "viec", "cua", "va", "cac", "ban", "mot", "so", "doi", "voi",
+        "cho", "tai", "trong", "theo", "den", "cung", "khi", "la", "co",
+        "the", "of", "and", "on", "for", "to", "in", "with", "by", "at",
+        # Chapter numerals, which are structure wearing letters.
+        "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x", "xi", "xii",
+    }
+)  # fmt: skip
 
 #: Target size in characters. BGE-M3 handles 8k tokens, but retrieval quality falls off long
 #: before that: a chunk answering two questions ranks well for neither.
@@ -49,6 +72,17 @@ class Chunk:
     ordinal: int
     page: int
     block_ids: list[str] = field(default_factory=list)
+    #: The article this chunk belongs to, so the supersession flag can be narrowed to the
+    #: articles an amendment actually touches and a reference can resolve by equality join
+    #: (ADR-0032, ADR-0036). NULL for front matter, an appendix, or a table before Điều 1.
+    article: int | None = None
+    #: The full dotted address of this clause — "12", "12.2", "12.2a" — which is what a
+    #: reference resolves against. The citation label is the same address dressed for a
+    #: reader; this one is a join key (ADR-0036).
+    anchor: str | None = None
+    #: The heading chain with instrument boilerplate stripped — what two clauses stating the
+    #: same rule share even when they are worded differently (ADR-0033).
+    subject_key: str | None = None
     #: Set when a single clause was too long and had to be divided.
     part: int = 1
     part_count: int = 1
@@ -208,6 +242,9 @@ def _emit(chunks: list[Chunk], group: _Group, legal_number: str | None, ordinal:
                 text=body.strip(),
                 ordinal=ordinal,
                 page=group.page,
+                article=article_number(group.section_path),
+                anchor=build_anchor(group.section_path),
+                subject_key=subject_key(group.section_path),
                 block_ids=[block.id for block in group.blocks],
                 part=index,
                 part_count=len(parts),
@@ -216,6 +253,54 @@ def _emit(chunks: list[Chunk], group: _Group, legal_number: str | None, ordinal:
         )
         ordinal += 1
     return ordinal
+
+
+def split_section_path(section_path_text: str | None) -> list[str]:
+    """The inverse of `Chunk.section_path_text`.
+
+    Exact rather than a best effort: the parts are heading fragments and never contain the
+    " > " separator. Lives here beside the join it undoes, so a reader of a stored
+    `chunks.section_path` — the backfill, a migration, a report — recovers the same list the
+    chunker started from instead of re-inventing the split.
+    """
+    if not section_path_text:
+        return []
+    return [part.strip() for part in section_path_text.split(">") if part.strip()]
+
+
+def article_number(section_path: list[str]) -> int | None:
+    """The article a section path sits under, as an integer.
+
+    Derived once, here, and stored — the SQL layer and the retrieval hot path must not
+    re-derive it with a regex over a text column, and ADR-0036's resolver needs to *join* on
+    it. Mirrors `diff._article_number`, which recovers the same number for the impact
+    traversal; the two are asserted to agree in the chunker's tests.
+    """
+    for part in section_path:
+        match = _ARTICLE.search(part)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def subject_key(section_path: list[str]) -> str | None:
+    """What this clause is *about*, normalized so two documents can be compared on it.
+
+    The heading chain with the structural labels and instrument boilerplate stripped: `Chương
+    II > Điều 6. Tỷ lệ an toàn vốn > Khoản 2` becomes `an toan von ty le`. Diacritics folded
+    because the same subject is typed both ways across a corpus this size, and tokens sorted
+    so word order cannot split one subject into two keys.
+
+    Returns None when nothing survives — a path of pure structure ("Điều 6") says what the
+    clause *is* but not what it is about, and a key that says nothing would match everything.
+    """
+    tokens = {
+        token
+        for part in section_path
+        for token in _WORD.findall(fold_diacritics(part).lower())
+        if len(token) > 1 and token not in _SUBJECT_STOPWORDS and not token.isdigit()
+    }
+    return " ".join(sorted(tokens)) or None
 
 
 def _heading_prefix(section_path: list[str]) -> str:

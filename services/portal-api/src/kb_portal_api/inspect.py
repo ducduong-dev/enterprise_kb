@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
 from kb_authz.compile import compile_sql_documents
@@ -36,9 +37,11 @@ from kb_common.logging import get_logger
 from kb_ports.models import EmbeddingPort
 from kb_ports.storage import StoragePort
 from kb_registry import repository as repo
+from kb_registry.expiry import ExpiryDecision, ExpiryLedger
 from kb_registry.publish import PublishService, RechunkResult
-from kb_schemas.enums import RefType
+from kb_schemas.enums import ExpiryBasis, ExpiryState, RefType
 from kb_schemas.kbdoc import KBDoc
+from kb_schemas.orm import DocumentExpiryRow
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -117,6 +120,88 @@ class EdgeView:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class ExpiryView:
+    """One row of the ledger, as a steward reads it.
+
+    Both clocks are here on purpose. `effective_to` is when the instrument stopped applying in
+    the world; `created_at`/`closed_at` are when this platform started and stopped believing
+    it. A reviewer investigating a past answer needs the second and will otherwise reach for
+    the first (ADR-0030).
+    """
+
+    row_id: uuid.UUID
+    effective_to: str
+    basis: str
+    state: str
+    #: NULL/empty = the whole document. Anything else is a partial expiry: it ends the clauses
+    #: named here and leaves the rest of the instrument in service (ADR-0040).
+    anchors: list[str]
+    evidence: str | None
+    source_document_id: uuid.UUID | None
+    source_title: str | None
+    detected_by: str
+    decided_by: str | None
+    created_at: str
+    closed_at: str | None
+
+    @property
+    def open(self) -> bool:
+        return self.closed_at is None
+
+    @property
+    def partial(self) -> bool:
+        return bool(self.anchors)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "row_id": str(self.row_id),
+            "effective_to": self.effective_to,
+            "basis": self.basis,
+            "state": self.state,
+            "anchors": self.anchors,
+            "partial": self.partial,
+            "evidence": self.evidence,
+            "source_document_id": (
+                str(self.source_document_id) if self.source_document_id else None
+            ),
+            "source_title": self.source_title,
+            "detected_by": self.detected_by,
+            "decided_by": self.decided_by,
+            "created_at": self.created_at,
+            "closed_at": self.closed_at,
+            "open": self.open,
+        }
+
+
+@dataclass
+class ExpiryPanel:
+    """The expiry section of the screen: what is in force, and how it got there."""
+
+    #: The date retrieval actually evaluates — the open confirmed ledger row if there is one,
+    #: otherwise the canonical version's own. This is the number a steward is looking for.
+    in_force: str | None = None
+    #: Where that date came from: `ledger` or `version`. Both are shown, because a steward who
+    #: typed an end date into a rate schedule needs to see why a different one is in force.
+    in_force_source: str | None = None
+    #: The canonical version's own `effective_to`, if it states one (a self-stated sunset).
+    version_effective_to: str | None = None
+    #: Rows still open — one per scope. Several coexist once partial expiries arrive.
+    current: list[ExpiryView] = field(default_factory=list)
+    #: Every row ever written for this document, oldest first. Nothing is deleted, and the
+    #: sequence is the answer to "why did this disappear from search in May".
+    history: list[ExpiryView] = field(default_factory=list)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "in_force": self.in_force,
+            "in_force_source": self.in_force_source,
+            "version_effective_to": self.version_effective_to,
+            "current": [row.as_dict() for row in self.current],
+            "history": [row.as_dict() for row in self.history],
+        }
+
+
 @dataclass
 class DocumentInspection:
     document: dict[str, Any]
@@ -124,6 +209,7 @@ class DocumentInspection:
     chunks: list[ChunkView] = field(default_factory=list)
     edges: list[EdgeView] = field(default_factory=list)
     lineage: list[dict[str, Any]] = field(default_factory=list)
+    expiry: ExpiryPanel = field(default_factory=ExpiryPanel)
     #: References this document makes to instruments the bank does not hold. Not edges — the
     #: target does not exist — but the reviewer's most useful question about the graph is
     #: "what is missing", and the answer is exactly this list (ADR-0028).
@@ -138,6 +224,7 @@ class DocumentInspection:
             "chunks": [chunk.as_dict() for chunk in self.chunks],
             "edges": [edge.as_dict() for edge in self.edges],
             "lineage": self.lineage,
+            "expiry": self.expiry.as_dict(),
             "pending": self.pending,
             "unreadable_edges": self.unreadable_edges,
             "warnings": self.warnings,
@@ -192,6 +279,7 @@ class InspectService:
             }
             for row in repo.pending_refs_from(self._session, document_id)
         ]
+        inspection.expiry = self._expiry(document_id, canonical_id)
         inspection.warnings = self._warnings(document, inspection)
         return inspection
 
@@ -361,6 +449,60 @@ class InspectService:
         lineage.sort(key=lambda item: (item["effective_from"] or "", item["title"]))
         return lineage
 
+    def _expiry(self, document_id: uuid.UUID, canonical_id: uuid.UUID | None) -> ExpiryPanel:
+        """The ledger for this document, plus the version date it competes with."""
+        ledger = ExpiryLedger(self._session)
+        rows = ledger.history(document_id)
+        titles = self._source_titles(rows)
+        views = [self._expiry_view(row, titles) for row in rows]
+
+        version = repo.get_version(self._session, canonical_id) if canonical_id else None
+        version_date = version.effective_to if version and version.effective_to else None
+        panel = ExpiryPanel(
+            version_effective_to=version_date.isoformat() if version_date else None,
+            current=[view for view in views if view.open],
+            history=views,
+        )
+        # The ledger wins where both exist (ADR-0030) — but both are shown, or a steward who
+        # set a date on the version cannot tell why a different one is in force.
+        in_force = ledger.effective_to_for(document_id)
+        if in_force is not None:
+            panel.in_force = in_force.isoformat()
+            panel.in_force_source = "ledger" if in_force != version_date else "version"
+        return panel
+
+    def _expiry_view(self, row: Any, titles: dict[uuid.UUID, str]) -> ExpiryView:
+        return ExpiryView(
+            row_id=row.id,
+            effective_to=row.effective_to.isoformat(),
+            basis=row.basis,
+            state=row.state,
+            anchors=list(row.anchors or []),
+            evidence=row.evidence,
+            source_document_id=row.source_document_id,
+            source_title=titles.get(row.source_document_id) if row.source_document_id else None,
+            detected_by=row.detected_by,
+            decided_by=row.decided_by,
+            created_at=row.created_at.isoformat(),
+            closed_at=row.closed_at.isoformat() if row.closed_at else None,
+        )
+
+    def _source_titles(self, rows: list[Any]) -> dict[uuid.UUID, str]:
+        """Titles of the instruments that ended this one.
+
+        Not ACL-checked, and deliberately: an expiry the caller is already reading names its
+        own cause, and withholding that would leave "expired by something you may not see",
+        which discloses the same thing while being useless. The *text* of the source is
+        reachable only through the ordinary filtered paths.
+        """
+        ids = {row.source_document_id for row in rows if row.source_document_id}
+        if not ids:
+            return {}
+        found = self._session.execute(
+            text("SELECT id, title FROM documents WHERE id = ANY(:ids)"), {"ids": list(ids)}
+        )
+        return {row.id: row.title for row in found}
+
     def _warnings(self, document: Any, inspection: DocumentInspection) -> list[str]:
         """What a reviewer should look at first, stated rather than left to be noticed."""
         warnings: list[str] = []
@@ -386,6 +528,40 @@ class InspectService:
             warnings.append(
                 f"{len(pending)} văn bản sửa đổi/bãi bỏ chưa được hợp nhất — kết quả tìm kiếm "
                 "vẫn kèm cảnh báo."
+            )
+        warnings.extend(self._expiry_warnings(inspection.expiry))
+        return warnings
+
+    def _expiry_warnings(self, expiry: ExpiryPanel) -> list[str]:
+        """The three things about expiry a steward must not have to notice for themselves."""
+        warnings: list[str] = []
+        proposed = [row for row in expiry.current if row.state == ExpiryState.PROPOSED.value]
+        if proposed:
+            warnings.append(
+                f"{len(proposed)} đề xuất hết hiệu lực đang chờ xác nhận — chưa ảnh hưởng "
+                "đến kết quả tìm kiếm."
+            )
+        # A partially expired document is still in service, and that is the point — but a
+        # reader of this screen must not mistake "published" for "wholly in force" (ADR-0040).
+        partial = [
+            row
+            for row in expiry.current
+            if row.partial and row.state == ExpiryState.CONFIRMED.value
+        ]
+        if partial:
+            anchors = ", ".join(sorted({a for row in partial for a in row.anchors}))
+            warnings.append(
+                f"Một số điều khoản đã hết hiệu lực ({anchors}); phần còn lại của văn bản "
+                "vẫn có hiệu lực và vẫn được trả về trong tìm kiếm."
+            )
+        if (
+            expiry.in_force
+            and expiry.version_effective_to
+            and expiry.in_force != expiry.version_effective_to
+        ):
+            warnings.append(
+                f"Ngày hết hiệu lực đang áp dụng ({expiry.in_force}) khác với ngày ghi "
+                f"trên phiên bản ({expiry.version_effective_to}); sổ quyết định được ưu tiên."
             )
         return warnings
 
@@ -418,6 +594,71 @@ class InspectService:
             },
         )
         return result
+
+    def mark_expired(
+        self,
+        document_id: uuid.UUID,
+        principal: Principal,
+        *,
+        effective_to: date,
+        evidence: str,
+        anchors: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """A steward's own judgement that this instrument stopped applying.
+
+        `detected_by` records the person, not a detector — which is what lets the four-eyes
+        guard see that the proposer and the confirmer are the same human on a regulated
+        document (INV-8). It proposes; it never applies.
+        """
+        self._readable_document(document_id, principal)
+        if not evidence.strip():
+            # Same discipline as ADR-0029's review screen and the PII override: a decision to
+            # withdraw a rule from every answer, with no stated reason, is unreviewable later.
+            raise ValidationError("marking a document expired requires a stated reason")
+        actor = principal.audit_actor
+        decision = ExpiryLedger(self._session, audit=self._audit).propose(
+            document_id,
+            effective_to=effective_to,
+            basis=ExpiryBasis.STEWARD,
+            detected_by=actor,
+            actor=actor,
+            anchors=anchors,
+            evidence=evidence.strip(),
+        )
+        log.info(
+            "expiry_proposed_by_steward",
+            extra={"document_id": str(document_id), "effective_to": effective_to.isoformat()},
+        )
+        return _decision_dict(decision)
+
+    def decide_expiry(
+        self,
+        document_id: uuid.UUID,
+        row_id: uuid.UUID,
+        principal: Principal,
+        *,
+        confirm: bool,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Confirm a proposed expiry, or withdraw one.
+
+        Confirming is the act that takes the document out of every default answer, so it runs
+        the ledger's guards rather than the screen's: only `confirmed` is served, a regulated
+        document needs a second pair of eyes, and the projection onto the chunks happens in
+        this transaction (ADR-0031).
+        """
+        self._readable_document(document_id, principal)
+        ledger = ExpiryLedger(self._session, audit=self._audit)
+        row = self._session.get(DocumentExpiryRow, row_id)
+        if row is None or row.document_id != document_id:
+            raise NotFound(
+                "expiry row not found on this document",
+                document_id=str(document_id),
+                row_id=str(row_id),
+            )
+        if confirm:
+            return _decision_dict(ledger.confirm(row_id, actor=principal.audit_actor))
+        return _decision_dict(ledger.revoke(row_id, actor=principal.audit_actor, reason=reason))
 
     def set_edge_confirmation(
         self,
@@ -529,3 +770,16 @@ class InspectService:
             )
         bucket, _, key = str(ref).partition("/")
         return KBDoc.model_validate_json(self._storage.get(bucket, key))
+
+
+def _decision_dict(decision: ExpiryDecision) -> dict[str, Any]:
+    """What the screen shows after an action — including what it did *not* do."""
+    return {
+        "row_id": str(decision.row_id),
+        "document_id": str(decision.document_id),
+        "effective_to": decision.effective_to.isoformat(),
+        "state": decision.state,
+        "chunks_projected": decision.chunks_projected,
+        "applied": decision.applied,
+        "note": decision.note,
+    }

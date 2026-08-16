@@ -18,11 +18,13 @@ gather, which prompt, how to refuse, what a caller may ask for.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
 from kb_common.errors import ConfigError, PolicyViolation
+from kb_schemas.api import ExpiredMatch
 from kb_schemas.enums import PrincipalKind
 
 PROMPT_DIR = Path(__file__).resolve().parents[2] / "prompts"
@@ -62,9 +64,35 @@ class SurfacePolicy:
     #: surface: an answer to a member of the public is the one place where a leaked identifier
     #: cannot be recalled, apologised for, or contained by an ACL (INV-7).
     output_filter_required: bool = True
+    #: Whether a refusal may name an instrument that has expired. "That rule ceased on 31/12;
+    #: I have nothing current" is a far better answer than "I found nothing", and it is also a
+    #: disclosure that the document exists — which is a per-category ruling on the public
+    #: surface (`[OPEN]`-10, ADR-0023).
+    names_expired_documents: bool = False
 
     def prompt(self) -> str:
         return (PROMPT_DIR / self.prompt_file).read_text(encoding="utf-8")
+
+    def expired_refusal(self, matches: Sequence[ExpiredMatch]) -> str:
+        """Name what ceased, and when — never quote it.
+
+        Fixed text around fixed facts, for the same reason `refusal` is fixed: a model asked to
+        explain why it cannot answer will reach for the repealed text and paraphrase it, which
+        is a citation to a rule that no longer applies wearing the clothes of an apology
+        (ADR-0018).
+        """
+        if not (self.names_expired_documents and matches):
+            return self.refusal
+        named = "; ".join(
+            f"{match.document_title or match.citation_label or 'văn bản'}"
+            f" (hết hiệu lực từ ngày {match.expired_on.strftime('%d/%m/%Y')})"
+            for match in matches
+        )
+        return (
+            f"Quy định liên quan đến câu hỏi này đã hết hiệu lực: {named}. "
+            "Tôi không tìm thấy quy định hiện hành thay thế trong kho tài liệu bạn được phép "
+            "truy cập. Vui lòng liên hệ đơn vị chủ quản để xác nhận quy định đang áp dụng."
+        )
 
     def check_output_filter(self, detector: object) -> None:
         """Refuse to serve without a working filter.
@@ -118,6 +146,7 @@ INTERNAL = SurfacePolicy(
         "bản liên quan."
     ),
     expand_graph=True,
+    names_expired_documents=True,
 )
 
 EXTERNAL = SurfacePolicy(
@@ -133,6 +162,11 @@ EXTERNAL = SurfacePolicy(
         "liên hệ hotline hoặc chi nhánh gần nhất để được hỗ trợ."
     ),
     expand_graph=False,
+    # `[OPEN]`-10. Telling a customer "that fee no longer applies, see X" is more useful and
+    # discloses that a document exists, which is an existence-disclosure decision per category
+    # (ADR-0023). Until Legal rules, the public surface keeps the generic refusal — the
+    # conservative default, and one flag to flip when the ruling arrives.
+    names_expired_documents=False,
 )
 
 POLICIES: dict[Surface, SurfacePolicy] = {

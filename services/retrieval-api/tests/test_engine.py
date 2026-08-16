@@ -24,9 +24,17 @@ from kb_ports.adapters.pgvector_index import PgVectorIndexAdapter
 from kb_ports.adapters.postgres_fts_index import PostgresFtsIndexAdapter
 from kb_ports.adapters.rerank import LexicalRerankAdapter
 from kb_ports.indexes import IndexHit
+from kb_registry.testing import make_chunk, make_document, make_version
 from kb_retrieval_api.engine import MAX_CHUNKS_PER_DOCUMENT, RetrievalEngine
 from kb_retrieval_api.fusion import cap_per_document, reciprocal_rank_fusion
-from kb_schemas.api import CitationLookupRequest, Facets, RetrieveRequest, RetrieveResponse
+from kb_schemas.api import (
+    CitationLookupRequest,
+    Facets,
+    ResolveAnchorRequest,
+    ResolveAnchorResponse,
+    RetrieveRequest,
+    RetrieveResponse,
+)
 from kb_schemas.enums import RetrievalMode
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
@@ -42,7 +50,9 @@ def audit() -> InMemoryAuditSink:
 
 
 @pytest.fixture
-def retrieval(seeded: Engine, session: Session, audit: InMemoryAuditSink) -> RetrievalEngine:
+def retrieval(
+    pristine_corpus: Engine, session: Session, audit: InMemoryAuditSink
+) -> RetrievalEngine:
     return RetrievalEngine(
         session,
         keyword_index=PostgresFtsIndexAdapter(session),
@@ -391,3 +401,141 @@ def test_per_document_cap_preserves_order() -> None:
     capped = cap_per_document(fused, 2)
     assert len(capped) == 2
     assert [item.chunk_id for item in capped] == [item.chunk_id for item in fused[:2]]
+
+
+# ------------------------------------------------- anchor resolution (M9b, ADR-0036)
+
+
+@pytest.fixture
+def cited(session: Session) -> tuple[uuid.UUID, uuid.UUID]:
+    """A two-clause article in a document nobody else in the suite touches."""
+    document_id = make_document(session, title="Thông tư về hệ số rủi ro")
+    version_id = make_version(session, document_id, effective_from=date(2020, 1, 1))
+    for ordinal, (anchor, article) in enumerate((("12.1", 12), ("12.2", 12), ("40", 40))):
+        make_chunk(session, document_id, version_id, ordinal=ordinal)
+        session.execute(
+            text(
+                "UPDATE chunks SET anchor = :a, article = :n "
+                "WHERE document_id = :d AND ordinal = :o"
+            ),
+            {"a": anchor, "n": article, "d": document_id, "o": ordinal},
+        )
+    session.flush()
+    return document_id, version_id
+
+
+def _resolve(
+    retrieval: RetrievalEngine, document_id: uuid.UUID, anchors: list[str], **kwargs: Any
+) -> ResolveAnchorResponse:
+    return retrieval.resolve_anchors(
+        ALL_PRINCIPALS[kwargs.pop("principal", "user_retail_staff")],
+        ResolveAnchorRequest(document_id=document_id, anchors=anchors, **kwargs),
+    )[0]
+
+
+def test_a_clause_anchor_resolves_to_exactly_that_clause(
+    retrieval: RetrievalEngine, cited: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    """The reason `chunks.anchor` exists: `article` alone cannot tell Khoản 2 from Khoản 1."""
+    document_id, _ = cited
+    response = _resolve(retrieval, document_id, ["12.2"])
+
+    assert [item.anchor for item in response.resolved] == ["12.2"]
+    assert response.unresolved == []
+    assert response.resolved[0].excerpt
+
+
+def test_an_article_anchor_resolves_to_all_of_its_clauses_in_order(
+    retrieval: RetrievalEngine, cited: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    """Điều 12 with two clauses *is* two retrievable units, and a reader following a reference
+    to the article should see them in document order."""
+    document_id, _ = cited
+    response = _resolve(retrieval, document_id, ["12"])
+
+    assert len(response.resolved) == 2
+    assert all(item.anchor == "12" for item in response.resolved)
+
+
+def test_an_anchor_that_names_nothing_is_reported_not_dropped(
+    retrieval: RetrievalEngine, cited: tuple[uuid.UUID, uuid.UUID]
+) -> None:
+    """The target may number its articles differently, an amendment may have inserted one we
+    have not consolidated, or the reference may be wrong. None is worth a silent empty
+    result (ADR-0028)."""
+    document_id, _ = cited
+    response = _resolve(retrieval, document_id, ["99.1"])
+
+    assert response.resolved == []
+    assert response.unresolved == ["99.1"]
+
+
+def test_a_clause_anchor_falls_back_to_its_article(
+    retrieval: RetrievalEngine, cited: tuple[uuid.UUID, uuid.UUID], session: Session
+) -> None:
+    """The chunker merges two short clauses into one chunk anchored at their common article,
+    so "40.2" has no chunk of its own while its text sits under "40". Reporting that
+    unresolved would tell a steward a perfectly good reference is broken."""
+    document_id, _ = cited
+    response = _resolve(retrieval, document_id, ["40.2"])
+
+    assert response.unresolved == []
+    assert [item.anchor for item in response.resolved] == ["40.2"], (
+        "the answer is labelled with the anchor that was asked for, not the one that matched"
+    )
+
+
+def test_a_reference_into_a_document_the_caller_may_not_read_resolves_to_nothing(
+    retrieval: RetrievalEngine, session: Session
+) -> None:
+    """The full chunk predicate, not the graph one: knowing an edge exists and reading the
+    text at the other end are different questions (INV-2, ADR-0036)."""
+    document_id = make_document(session, title="Ghi chú hạn chế")
+    version_id = make_version(session, document_id)
+    make_chunk(session, document_id, version_id)
+    session.execute(
+        text(
+            "UPDATE chunks SET anchor = '5', article = 5, visibility = 'restricted', "
+            "allowed_groups = ARRAY['dept/legal'] WHERE document_id = :d"
+        ),
+        {"d": document_id},
+    )
+    session.flush()
+
+    outsider = _resolve(retrieval, document_id, ["5"], principal="user_it_engineer")
+    assert outsider.resolved == []
+    assert outsider.unresolved == ["5"]
+
+    insider = _resolve(retrieval, document_id, ["5"], principal="user_legal_counsel")
+    assert [item.anchor for item in insider.resolved] == ["5"]
+
+
+def test_a_reference_into_an_expired_clause_resolves_to_nothing_today(
+    retrieval: RetrievalEngine, cited: tuple[uuid.UUID, uuid.UUID], session: Session
+) -> None:
+    """Effectivity is in the predicate, so a reference into a repealed clause comes back empty
+    on the default path — and the caller is told, rather than shown a rule that ended."""
+    document_id, _ = cited
+    session.execute(
+        text(
+            "UPDATE chunks SET effective_to = DATE '2021-01-01' "
+            "WHERE anchor = '12.2' AND document_id = :d"
+        ),
+        {"d": document_id},
+    )
+    session.flush()
+
+    assert _resolve(retrieval, document_id, ["12.2"]).unresolved == ["12.2"]
+
+
+def test_resolution_is_audited_with_what_it_returned(
+    retrieval: RetrievalEngine, cited: tuple[uuid.UUID, uuid.UUID], audit: InMemoryAuditSink
+) -> None:
+    """A reference is a read path, so it owes the same record as any other (INV-11)."""
+    document_id, _ = cited
+    _resolve(retrieval, document_id, ["12.2"])
+
+    record = audit.records[-1]
+    assert record.object_ref["document_id"] == str(document_id)
+    assert record.detail["anchors"] == ["12.2"]
+    assert record.resolved_filter

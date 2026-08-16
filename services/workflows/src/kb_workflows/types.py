@@ -51,6 +51,9 @@ class IngestRequest:
 class DetectedRefOut:
     legal_number: str
     ref_type: str
+    #: Clause-precise addresses read from the citing text — "12", "12.2". Carried through the
+    #: workflow so the edge is as precise as the citation was (ADR-0036).
+    anchors: list[str] = field(default_factory=list)
     block_id: str | None = None
     confidence: float = 0.0
 

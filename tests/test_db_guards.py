@@ -166,3 +166,109 @@ def test_reference_edges_cannot_be_self_loops(session: Session) -> None:
             {"id": uuid.uuid4(), "doc": doc_id},
         )
         session.flush()
+
+
+# ------------------------------------------------------------------ expiry ledger (ADR-0030)
+
+
+def _expire(
+    session: Session,
+    doc_id: uuid.UUID,
+    *,
+    basis: str = "steward",
+    state: str = "confirmed",
+    anchors: list[str] | None = None,
+    source: uuid.UUID | None = None,
+    closed: bool = False,
+) -> uuid.UUID:
+    row_id = uuid.uuid4()
+    session.execute(
+        text(
+            """
+            INSERT INTO document_expiry (id, document_id, effective_to, basis,
+                                         source_document_id, anchors, evidence, state,
+                                         detected_by, created_at, closed_at)
+            VALUES (:id, :doc, DATE '2026-12-31', :basis, :source, CAST(:anchors AS TEXT[]),
+                    'Thông tư này hết hiệu lực kể từ ngày 01/01/2027.', :state,
+                    'tester', now(), :closed)
+            """
+        ),
+        {
+            "id": row_id,
+            "doc": doc_id,
+            "basis": basis,
+            "source": source,
+            "anchors": anchors,
+            "state": state,
+            "closed": datetime.now(UTC) if closed else None,
+        },
+    )
+    return row_id
+
+
+def test_one_open_expiry_per_scope(session: Session) -> None:
+    """The open row is the current belief — so two of them for the same scope is not a
+    disagreement to resolve at read time, it is a bug. A new decision closes its predecessor
+    in the same transaction."""
+    doc_id = _make_document(session)
+    _expire(session, doc_id)
+    with pytest.raises(IntegrityError):
+        _expire(session, doc_id)
+        session.flush()
+
+
+def test_a_closed_row_does_not_block_the_row_that_replaced_it(session: Session) -> None:
+    """The sequence a document accumulates over its life: proposed, confirmed, revoked and
+    re-proposed with a corrected date."""
+    doc_id = _make_document(session)
+    _expire(session, doc_id, state="proposed", closed=True)
+    _expire(session, doc_id, state="confirmed")
+    session.flush()
+
+
+def test_two_clauses_of_one_document_expire_independently(session: Session) -> None:
+    """The partially expired document, which is the ordinary shape in this corpus: Vietnamese
+    instruments are abrogated in pieces, so a row over Điều 12 and a row over Điều 40 are both
+    legitimately open."""
+    doc_id = _make_document(session)
+    _expire(session, doc_id, anchors=["12.2"])
+    _expire(session, doc_id, anchors=["40"])
+    session.flush()
+
+
+def test_a_whole_document_expiry_collides_with_itself_however_it_is_written(
+    session: Session,
+) -> None:
+    """NULL anchors and an empty array are the same scope — the whole document — and must not
+    slip past each other into two open rows."""
+    doc_id = _make_document(session)
+    _expire(session, doc_id, anchors=None)
+    with pytest.raises(IntegrityError):
+        _expire(session, doc_id, anchors=[])
+        session.flush()
+
+
+def test_only_an_attributed_basis_may_name_a_source_instrument(session: Session) -> None:
+    """A `self_stated` sunset that points at another document attributes the decision to the
+    wrong place, and the inspection screen would show a reader the wrong reason."""
+    doc_id = _make_document(session)
+    other_id = _make_document(session)
+    with pytest.raises(IntegrityError):
+        _expire(session, doc_id, basis="self_stated", source=other_id)
+        session.flush()
+
+
+def test_a_document_cannot_be_abrogated_by_itself(session: Session) -> None:
+    doc_id = _make_document(session)
+    with pytest.raises(IntegrityError):
+        _expire(session, doc_id, basis="abrogated_by", source=doc_id)
+        session.flush()
+
+
+def test_an_unknown_state_is_refused(session: Session) -> None:
+    """Only `confirmed` is served, so a state nothing recognises must not reach the table —
+    a typo that reads as "not confirmed" everywhere would silently keep a rule in service."""
+    doc_id = _make_document(session)
+    with pytest.raises(IntegrityError):
+        _expire(session, doc_id, state="aproved")
+        session.flush()

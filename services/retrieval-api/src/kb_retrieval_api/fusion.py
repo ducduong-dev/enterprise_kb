@@ -76,6 +76,7 @@ def _merge(primary: IndexHit, other: IndexHit) -> IndexHit:
         text=primary.text or other.text,
         citation_label=primary.citation_label or other.citation_label,
         section_path=primary.section_path or other.section_path,
+        article=primary.article if primary.article is not None else other.article,
         highlights=primary.highlights or other.highlights,
     )
 

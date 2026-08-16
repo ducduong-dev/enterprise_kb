@@ -172,6 +172,13 @@ button.secondary { background: var(--muted); }
 .lineage__date { color: var(--muted); font-variant-numeric: tabular-nums; }
 .lineage__ok { color: var(--muted); }
 
+/* Expiry: a closed ledger row is history, not a live decision — dimmed so the open row reads
+   as the current belief at a glance (ADR-0030). */
+.row--closed { opacity: 0.55; }
+.inspect__expiry-form { display: flex; align-items: flex-end; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; }
+.inspect__expiry-form label { display: grid; gap: 0.25rem; font-size: 0.9rem; color: var(--muted); }
+.inspect__expiry-form input[type="text"] { min-width: 24rem; }
+
 .inspect__chunks-header { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
 .inspect__chunks-header h2 { margin-right: auto; }
 .inspect__chunks-header .checkbox { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; color: var(--muted); }

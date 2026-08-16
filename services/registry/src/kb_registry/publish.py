@@ -44,6 +44,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from kb_registry import repository as repo
+from kb_registry.expiry import ExpiryLedger
 
 log = get_logger(__name__)
 
@@ -228,6 +229,15 @@ class PublishService:
         written = self._insert_chunks(document, version, prepared)
         edges = self._rebuild_graph_serving(document)
 
+        # `_insert_chunks` copies the *version's* dates, which know nothing about the ledger.
+        # Without this a republish of an expired document would resurrect it, silently. Same
+        # transaction, so there is no window in which the resurrected chunks are visible.
+        ledger = ExpiryLedger(session, audit=self._audit)
+        ledger.project(document.id)
+        # And an instrument that repeals others now says so from a published document with a
+        # fixed effective date — which is the first moment those expiries can be proposed.
+        proposed = len(ledger.propose_from_abrogations(document.id, actor=actor))
+
         outbox = repo.enqueue(
             session,
             TOPIC_PUBLISHED,
@@ -257,6 +267,7 @@ class PublishService:
                         "visibility": document.visibility,
                         "approver": approval.approver if approval else None,
                         "pii_status": version.pii_status,
+                        "expiries_proposed": proposed,
                     },
                 )
             )
@@ -325,6 +336,10 @@ class PublishService:
         prepared = self.prepare(kbdoc, legal_number=document.legal_number)
         written = self._insert_chunks(document, version, prepared)
         edges = self._rebuild_graph_serving(document)
+        # Chunk ids do not survive a rechunk and neither do their dates: these are new rows
+        # carrying the version's `effective_to`. The ledger is the authority, so it is re-read
+        # rather than assumed (ADR-0040).
+        ExpiryLedger(session, audit=self._audit).project(document.id)
 
         # The same event a publish emits: to anything downstream, this version's chunks changed,
         # which is all an external index needs to know.
@@ -397,11 +412,12 @@ class PublishService:
                 text(
                     """
                     INSERT INTO chunks (id, document_id, version_id, section_path,
-                        citation_label, text, embedding, visibility, allowed_groups,
-                        department, category_path, doc_class, doc_status, effective_from,
-                        effective_to, tombstoned, ordinal, page)
+                        citation_label, article, anchor, subject_key, text, embedding, visibility,
+                        allowed_groups, department, category_path, doc_class, doc_status,
+                        effective_from, effective_to, tombstoned, ordinal, page)
                     VALUES (:id, :document_id, :version_id, :section_path, :citation_label,
-                        :text, CAST(:embedding AS vector), CAST(:visibility AS visibility),
+                        :article, :anchor, :subject_key, :text, CAST(:embedding AS vector),
+                        CAST(:visibility AS visibility),
                         CAST(:allowed_groups AS TEXT[]), :department,
                         CAST(:category_path AS ltree), CAST(:doc_class AS doc_class),
                         'published', :effective_from, :effective_to, FALSE, :ordinal, :page)
@@ -413,6 +429,12 @@ class PublishService:
                     "version_id": version.id,
                     "section_path": item.chunk.section_path_text or None,
                     "citation_label": item.chunk.citation_label,
+                    # Derived by the chunker, stored rather than re-derived: the supersession
+                    # predicate and the reference resolver both need to filter and join on
+                    # them (ADR-0032, ADR-0036).
+                    "article": item.chunk.article,
+                    "anchor": item.chunk.anchor,
+                    "subject_key": item.chunk.subject_key,
                     "text": item.chunk.text,
                     "embedding": "[" + ",".join(f"{v:.6f}" for v in item.embedding) + "]",
                     # The ACL is denormalized from the document at publish time (ADR-0003).
@@ -438,10 +460,16 @@ class PublishService:
 #: edge, written by the consolidation workflow, is what clears the flag — which is why the
 #: edge is created inside the publish transaction rather than announced afterwards.
 #:
-#: `retrieval-api` runs the same predicate in bulk (`RetrievalEngine._superseded_documents`);
-#: the two are asserted to agree in `tests/test_consolidation_flow.py`.
+#: It carries `articles` because the answer is article-shaped: an amendment usually touches two
+#: or three articles of a sixty-article circular, and warning on all sixty is how the warning
+#: stops being read (ADR-0032). An empty/NULL list means the whole document, which is the
+#: original behaviour and what an edge with no article detail still gets.
+#:
+#: `retrieval-api` runs the same predicate in bulk (`RetrievalEngine._superseded_articles`);
+#: the two are asserted to agree — at article granularity — in
+#: `tests/test_consolidation_flow.py`.
 SUPERSEDED_PREDICATE = """
-    SELECT DISTINCT r.dst_document_id
+    SELECT r.dst_document_id, r.articles
     FROM document_refs r
     JOIN documents src ON src.id = r.src_document_id
     WHERE r.ref_type IN ('amends', 'abrogates')
@@ -456,11 +484,11 @@ SUPERSEDED_PREDICATE = """
 
 
 def is_superseded(session: Session, document_id: uuid.UUID) -> bool:
-    """True when an amendment targets this document and has not been consolidated yet.
+    """True when *any* unconsolidated amendment targets this document.
 
-    Retrieval flags these results: the text is still canonical, but an instrument amending it
-    exists and the bank has not folded it in, so quoting it without a warning would be quoting
-    something already known to be out of date.
+    Deliberately still document-shaped. This is the workflow question — "does this need a
+    consolidation?" — and the answer does not depend on which articles moved. Only the
+    retrieval-facing answer narrows to articles (ADR-0032).
     """
     row = session.execute(
         text(f"SELECT 1 FROM ({SUPERSEDED_PREDICATE}) s WHERE s.dst_document_id = :id LIMIT 1"),

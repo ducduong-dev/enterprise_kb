@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import uuid
+from datetime import date
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, File, Form, Header, Query, Response, UploadFile
@@ -33,7 +34,7 @@ from kb_registry.service import RegistryService
 from kb_schemas.api import CitationLookupRequest, Facets, RetrieveRequest, RetrieveResponse
 from kb_schemas.enums import DocClass, Visibility
 from kb_workflows.types import Classification, IngestRequest, UploadRef
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from kb_portal_api.auth import current_principal, require_role
@@ -660,6 +661,80 @@ def decide_edge(
         body.ref_type,
         confirm=body.confirm,
         actor=principal.audit_actor,
+    )
+
+
+class ExpiryProposalIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    #: The last day the instrument applied. Inclusive, matching the effectivity predicate: a
+    #: rule replaced from 01/01 has an `effective_to` of 31/12.
+    effective_to: date
+    #: Why. Required, and stored on the row — the sentence it was read from where there is one,
+    #: the steward's reasoning where there is not. An expiry with no stated reason cannot be
+    #: reviewed years later, which is when it will be (ADR-0029/0030).
+    evidence: str = Field(min_length=10, max_length=2000)
+    #: Clause anchors ("12", "12.2") for a partial expiry. Recorded but not applied until M9c.
+    anchors: list[str] = Field(default_factory=list, max_length=64)
+
+
+class ExpiryDecisionIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    #: True confirms the proposal and takes the document out of every default answer; false
+    #: withdraws it and puts the document back.
+    confirm: bool
+    #: Required to withdraw. Same reason the proposal needs one.
+    reason: str = Field(default="", max_length=2000)
+
+
+@app.post("/v1/documents/{document_id}/expiry")
+def propose_expiry(
+    document_id: uuid.UUID,
+    body: ExpiryProposalIn,
+    principal: Principal = Depends(require_role(Role.STEWARD)),
+    inspector: InspectService = Depends(inspect_service),
+) -> dict[str, Any]:
+    """Mark a document as having stopped applying — as a proposal, never as a fact.
+
+    Nothing changes for any reader until it is confirmed. That separation is the whole design:
+    a detector and a steward write the same kind of row, and only a decision serves it.
+    """
+    return inspector.mark_expired(
+        document_id,
+        principal,
+        effective_to=body.effective_to,
+        evidence=body.evidence,
+        anchors=body.anchors,
+    )
+
+
+@app.post("/v1/documents/{document_id}/expiry/{row_id}")
+def decide_expiry(
+    document_id: uuid.UUID,
+    row_id: uuid.UUID,
+    body: ExpiryDecisionIn,
+    principal: Principal = Depends(require_role(Role.STEWARD)),
+    inspector: InspectService = Depends(inspect_service),
+) -> dict[str, Any]:
+    """Confirm a proposed expiry, or withdraw one.
+
+    Confirming removes the document from every default answer from its date, so the guards are
+    the ledger's rather than this route's: a regulated document needs a second pair of eyes
+    (INV-8), and the dates land on the chunks inside this transaction so serving never waits
+    for the nightly sweep (ADR-0031).
+
+    The steward role rather than the approver role, with four eyes enforced *within* it: the
+    people who know an instrument is finished are the ones who own it. What INV-8 requires is
+    that no single person does it alone on regulated content, not that a different job title
+    does it.
+    """
+    return inspector.decide_expiry(
+        document_id,
+        row_id,
+        principal,
+        confirm=body.confirm,
+        reason=body.reason,
     )
 
 

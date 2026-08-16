@@ -57,6 +57,27 @@ def _as_date(value: str | None) -> date | None:
         return None
 
 
+def _articles_for(ref: DetectedRefIn) -> list[int]:
+    """The article numbers behind a reference's anchors.
+
+    Derived rather than taken from the caller, so `articles` and `anchors` cannot disagree
+    about which articles a reference touches — the impact traversal reads the first and the
+    resolver reads the second, and a reference that means different things to the two is a
+    policy owner told the wrong thing (ADR-0036).
+
+    Falls back to whatever the caller supplied when there are no anchors: an edge confirmed by
+    hand on the review screen still names articles that way.
+    """
+    if not ref.anchors:
+        return list(ref.articles)
+    numbers = set()
+    for anchor in ref.anchors:
+        head = anchor.split(".")[0].strip()
+        if head.isdigit():
+            numbers.add(int(head))
+    return sorted(numbers)
+
+
 #: Topic for the outbox event the indexer consumes (M2).
 TOPIC_VERSION_CREATED = "registry.version_created"
 
@@ -480,6 +501,9 @@ class RegistryService:
                     dst_document_id=document_id,
                     ref_type=pending.ref_type,
                     articles=pending.articles,
+                    # Promoted unchanged: the precision was read from the citing text when it
+                    # was ingested, and re-deriving it here would need that text again.
+                    anchors=pending.anchors,
                     detected_by=pending.detected_by,
                     confirmed_by=None,
                     created_at=repo.now(),
@@ -524,7 +548,8 @@ class RegistryService:
                         target_legal_number=ref.legal_number,
                         target_key=normalize_legal_number(ref.legal_number),
                         ref_type=ref.ref_type.value,
-                        articles=ref.articles or None,
+                        articles=_articles_for(ref) or None,
+                        anchors=ref.anchors or None,
                         detected_by=ref.detected_by,
                         created_at=repo.now(),
                     ),
@@ -542,7 +567,8 @@ class RegistryService:
                     src_document_id=document_id,
                     dst_document_id=target.id,
                     ref_type=ref.ref_type.value,
-                    articles=ref.articles or None,
+                    articles=_articles_for(ref) or None,
+                    anchors=ref.anchors or None,
                     detected_by=ref.detected_by,
                     confirmed_by=None,
                     created_at=repo.now(),

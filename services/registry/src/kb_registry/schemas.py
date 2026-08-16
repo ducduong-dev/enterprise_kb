@@ -116,6 +116,9 @@ class DetectedRefIn(BaseModel):
 
     legal_number: str
     ref_type: RefType = RefType.CITES
+    #: Clause-precise, in the dotted form the target's chunks carry. `articles` is derived from
+    #: it rather than supplied, so the two cannot disagree (ADR-0036).
+    anchors: list[str] = Field(default_factory=list)
     articles: list[int] = Field(default_factory=list)
     detected_by: str = "idp"
 

@@ -53,6 +53,13 @@ class ReviewTaskType(StrEnum):
     MERGE_REVIEW = "merge_review"
     IMPACT_REVIEW = "impact_review"
     PII_OVERRIDE = "pii_override"
+    #: A confirmed expiry is approaching. Opened at T-30 by the sweep so a steward is warned
+    #: before an instrument leaves service, rather than after (ADR-0031).
+    EXPIRY_REVIEW = "expiry_review"
+    #: `documents.review_by` has come round — periodic re-attestation that an internal
+    #: procedure is still accurate. A separate queue from the above because it is different
+    #: work on a different rhythm.
+    PERIODIC_REVIEW = "periodic_review"
 
 
 class ReviewTaskState(StrEnum):
@@ -60,6 +67,55 @@ class ReviewTaskState(StrEnum):
     CLAIMED = "claimed"
     DECIDED = "decided"
     CANCELLED = "cancelled"
+
+
+class ExpiryBasis(StrEnum):
+    """Where an expiry date came from — and, from M9c, what it is allowed to do.
+
+    `SELF_STATED` is read from the instrument's own sunset clause at ingest. `ABROGATED_BY` and
+    `DECLARED_BY` both arrive from a later instrument: the first from an `abrogates` edge, the
+    second from a sentence that names the clauses it ends (ADR-0039). `STEWARD` is a person
+    deciding without either.
+    """
+
+    SELF_STATED = "self_stated"
+    ABROGATED_BY = "abrogated_by"
+    DECLARED_BY = "declared_by"
+    STEWARD = "steward"
+
+
+class ExpiryState(StrEnum):
+    """Only `CONFIRMED` is ever served. A detector writes `PROPOSED` (ADR-0030)."""
+
+    PROPOSED = "proposed"
+    CONFIRMED = "confirmed"
+    REVOKED = "revoked"
+
+
+class SupersessionBasis(StrEnum):
+    """How we came to believe one clause replaced another — and what that permits.
+
+    `DECLARED` is the corpus stating it in the replacing text (ADR-0039); the rest are our own
+    conclusions. Only the first is evidence that a rule *ended*, which is why only it writes an
+    expiry ledger row alongside (ADR-0040).
+    """
+
+    DECLARED = "declared"
+    EDGE_ARTICLE = "edge_article"
+    DETECTED = "detected"
+    STEWARD = "steward"
+
+
+class SupersessionVerdict(StrEnum):
+    """ADR-0033's four buckets. Four rather than a confidence score because `DIFFERENT_SCOPE`
+    and `CONFLICTING_UNRESOLVED` are not weak instances of `SUPERSEDED` — they are different
+    kinds of wrong, and a single score collapses them into "below threshold" where they are
+    dropped without a trace."""
+
+    SAME_RULE_RESTATED = "same_rule_restated"
+    SUPERSEDED = "superseded"
+    DIFFERENT_SCOPE = "different_scope"
+    CONFLICTING_UNRESOLVED = "conflicting_unresolved"
 
 
 class PrincipalKind(StrEnum):

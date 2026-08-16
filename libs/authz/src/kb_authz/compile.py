@@ -82,6 +82,44 @@ def compile_sql(
     return "(" + " AND ".join(f"({c})" for c in clauses) + ")", params
 
 
+def compile_sql_expired(
+    f: ResolvedFilter, alias: str = "c", prefix: str = "acl"
+) -> tuple[str, dict[str, Any]]:
+    """The same ACL, restricted to chunks that have *already* expired.
+
+    For the named refusal: "that rule ceased on 31/12/2026" is more use to a reader than
+    silence, and silence is indistinguishable from "the bank never said anything about this"
+    (ADR-0028). It exists as its own compiler rather than a flag on `compile_sql` for one
+    reason — the predicate it emits **cannot return a live chunk**. `effective_to` is required
+    to be non-null and in the past, so the worst a bug in the caller can do is show a reader
+    something that has stopped applying, never something they may not see and never something
+    current dressed up as expired.
+
+    Everything else — visibility, group unlock, status, department, category, class — is the
+    caller's own filter, unchanged and still inside the query (INV-2). What comes back is
+    metadata for a refusal: the instrument, the label and the date. Never the text, which would
+    be a citation, and a citation to a repealed rule is the thing this whole milestone exists
+    to prevent (ADR-0018 unchanged).
+    """
+    where, params = compile_sql(f, alias, prefix)
+    # `compile_sql` already asserted `effective_to IS NULL OR effective_to >= :on`; the caller
+    # concatenates with AND, so this fragment has to replace it rather than add to it.
+    live = (
+        f"({alias}.effective_from IS NULL OR {alias}.effective_from <= :{prefix}_effective_on)"
+        f" AND ({alias}.effective_to IS NULL OR {alias}.effective_to >= :{prefix}_effective_on)"
+    )
+    expired = (
+        f"({alias}.effective_from IS NULL OR {alias}.effective_from <= :{prefix}_effective_on)"
+        f" AND {alias}.effective_to IS NOT NULL"
+        f" AND {alias}.effective_to < :{prefix}_effective_on"
+    )
+    if live not in where:  # pragma: no cover - guards a refactor of compile_sql
+        raise AssertionError(
+            "compile_sql no longer emits the effectivity predicate this compiler replaces"
+        )
+    return where.replace(live, expired), params
+
+
 def compile_sql_graph(
     f: ResolvedFilter, alias: str = "g", prefix: str = "gacl"
 ) -> tuple[str, dict[str, Any]]:

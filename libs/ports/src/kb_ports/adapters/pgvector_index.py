@@ -58,7 +58,7 @@ class PgVectorIndexAdapter:
             text(
                 f"""
                 SELECT c.id, c.document_id, c.version_id, c.text, c.citation_label,
-                       c.section_path,
+                       c.section_path, c.article,
                        1 - (c.embedding <=> CAST(:query_vector AS vector)) AS score
                 FROM chunks c
                 WHERE {where} AND c.embedding IS NOT NULL
@@ -78,6 +78,7 @@ class PgVectorIndexAdapter:
                 text=row["text"],
                 citation_label=row["citation_label"],
                 section_path=row["section_path"],
+                article=row["article"],
             )
             for row in rows
         ]

@@ -31,6 +31,10 @@ class IndexHit:
     text: str | None = None
     citation_label: str | None = None
     section_path: str | None = None
+    #: The article this chunk belongs to. Carried through the index because the supersession
+    #: flag is answered per article, and re-deriving it from the section path in the retrieval
+    #: hot path would be a regex over a text column per hit (ADR-0032).
+    article: int | None = None
     highlights: tuple[str, ...] = ()
 
 

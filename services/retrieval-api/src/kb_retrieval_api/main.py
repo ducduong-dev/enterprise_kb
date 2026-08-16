@@ -35,7 +35,13 @@ from kb_ports.adapters.postgres_fts_index import PostgresFtsIndexAdapter
 from kb_ports.adapters.rerank import LexicalRerankAdapter, TeiRerankAdapter
 from kb_ports.indexes import KeywordIndexPort, VectorIndexPort
 from kb_ports.models import EmbeddingPort, RerankPort
-from kb_schemas.api import CitationLookupRequest, RetrieveRequest, RetrieveResponse
+from kb_schemas.api import (
+    CitationLookupRequest,
+    ResolveAnchorRequest,
+    ResolveAnchorResponse,
+    RetrieveRequest,
+    RetrieveResponse,
+)
 from sqlalchemy.orm import Session
 
 from kb_retrieval_api.engine import RetrievalEngine
@@ -116,6 +122,23 @@ def citation_lookup(
     retrieval: RetrievalEngine = Depends(engine),
 ) -> RetrieveResponse:
     return retrieval.citation_lookup(principal, request).response
+
+
+@app.post("/v1/resolve-anchor", response_model=ResolveAnchorResponse)
+def resolve_anchor(
+    request: ResolveAnchorRequest,
+    principal: Principal = Depends(current_principal),
+    retrieval: RetrievalEngine = Depends(engine),
+) -> ResolveAnchorResponse:
+    """Resolve a reference the platform parsed itself to the clauses it names.
+
+    Distinct from `/v1/citation-lookup`, which trigram-matches text a *human* typed against
+    citation labels. Here the document is already identified and the anchor is already
+    structured, so this is an equality join with nothing to tune — and it runs the full chunk
+    predicate, so a reference into a document the caller may not read, or into a clause no
+    longer in force, resolves to nothing (ADR-0036).
+    """
+    return retrieval.resolve_anchors(principal, request)[0]
 
 
 @app.get("/v1/documents/{document_id}")

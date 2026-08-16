@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import jwt
@@ -28,11 +28,12 @@ from kb_chat_api.main import (
     retrieval,
 )
 from kb_chat_api.service import ChatService
+from kb_chat_api.surfaces import policy_for
 from kb_common.audit import InMemoryAuditSink
 from kb_common.config import get_settings, reset_settings_cache
 from kb_pii_gate.detector import PatternPiiDetector
 from kb_ports.adapters.generation import ExtractiveGeneration
-from kb_schemas.api import RetrievedChunk, RetrieveRequest, RetrieveResponse
+from kb_schemas.api import ExpiredMatch, RetrievedChunk, RetrieveRequest, RetrieveResponse
 
 SECRET = "kb-test-secret"
 CAPITAL = "Ngân hàng phải duy trì tỷ lệ an toàn vốn tối thiểu là 8% theo Điều 6."
@@ -316,3 +317,43 @@ def test_an_internal_deployment_still_serves_both(client: TestClient) -> None:
     """The default deployment is the internal one; nothing about M8 narrows it."""
     assert ask(client, bearer=user_token(), surface="internal").status_code == 200
     assert ask(client, bearer=external_token(), surface="external").status_code == 200
+
+
+# ------------------------------------------------------------- expired refusals (M9a)
+
+
+def _expired(title: str = "Biểu phí dịch vụ 2023") -> ExpiredMatch:
+    return ExpiredMatch(
+        document_id=uuid.uuid4(),
+        document_title=title,
+        citation_label="Mục 2, BP 01/2023",
+        expired_on=date(2026, 12, 31),
+    )
+
+
+def test_the_internal_surface_names_what_ceased_instead_of_saying_nothing() -> None:
+    """Silence is indistinguishable from "the bank never said anything about this". Naming the
+    instrument and the date is the whole point of M9a's refusal (ADR-0028/0030)."""
+    answer = policy_for("internal").expired_refusal([_expired()])
+
+    assert "Biểu phí dịch vụ 2023" in answer
+    assert "31/12/2026" in answer
+    assert "hết hiệu lực" in answer
+
+
+def test_the_public_surface_does_not_disclose_that_the_document_exists() -> None:
+    """`[OPEN]`-10: naming a repealed fee schedule to a customer is more useful *and* is an
+    existence disclosure. Until Legal rules, the generic refusal stands."""
+    generic = policy_for("external").refusal
+    assert policy_for("external").expired_refusal([_expired()]) == generic
+
+
+def test_a_refusal_with_nothing_expired_is_the_ordinary_one() -> None:
+    assert policy_for("internal").expired_refusal([]) == policy_for("internal").refusal
+
+
+def test_the_named_refusal_never_quotes_the_repealed_text() -> None:
+    """A citation to a rule that no longer applies is exactly what the milestone prevents, and
+    an apology that paraphrases the rule is still a citation (ADR-0018). `ExpiredMatch` carries
+    no text at all, which is what makes that structural rather than a prompt instruction."""
+    assert "text" not in ExpiredMatch.model_fields

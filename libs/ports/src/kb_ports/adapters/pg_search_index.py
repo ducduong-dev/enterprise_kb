@@ -100,7 +100,7 @@ class PgSearchIndexAdapter:
             text(
                 f"""
                 SELECT c.id, c.document_id, c.version_id, c.text, c.citation_label,
-                       c.section_path,
+                       c.section_path, c.article,
                        paradedb.score(c.id) AS score,
                        paradedb.snippet(c.text, '<mark>', '</mark>', :snippet_chars) AS highlight
                 FROM chunks c
@@ -140,6 +140,7 @@ class PgSearchIndexAdapter:
                 text=row["text"],
                 citation_label=row["citation_label"],
                 section_path=row["section_path"],
+                article=row["article"],
                 highlights=(row["highlight"],) if row["highlight"] else (),
             )
             for row in rows

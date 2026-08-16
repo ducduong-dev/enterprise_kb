@@ -12,6 +12,7 @@ policies use `Article`/`Section` while carrying the same legal weight.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import IntEnum
 
@@ -154,22 +155,104 @@ class SectionTracker:
         self._stack.clear()
 
 
+@dataclass(frozen=True, slots=True)
+class _Location:
+    """Where in a document a section path points.
+
+    One definition, because two consumers read the same path for different audiences: the
+    citation label a human quotes, and the anchor a reference resolves against. Two
+    implementations of "which article is this" is two chances for a reference to land on the
+    wrong clause (ADR-0036).
+    """
+
+    #: The article heading as written — "Điều 12" or "Article 12". The corpus is bilingual and
+    #: a citation must read back in the language the document was written in.
+    article_label: str | None
+    #: The same article as a bare number, which is what an anchor compares on.
+    article: str | None
+    clause: str | None
+    point: str | None
+
+
+def _location_of(path: list[str]) -> _Location:
+    article = next((p for p in path if p.startswith(("Điều", "Article"))), None)
+    clause = next((p for p in path if p.startswith("Khoản")), None)
+    point = next((p for p in path if p.startswith("Điểm")), None)
+    return _Location(
+        article_label=article,
+        article=article.split()[-1] if article else None,
+        clause=clause.split()[-1] if clause else None,
+        point=point.split()[-1] if point else None,
+    )
+
+
+def build_anchor(path: list[str]) -> str | None:
+    """The dotted address of the clause this path names: `"12"`, `"12.2"`, `"12.2a"`.
+
+    What a reference resolves against, and what a partial expiry names. Bare numbers, so it is
+    directly comparable to the anchors parsed out of citing text — the citation *label* is the
+    same address dressed for a reader.
+
+    `None` when the path names no article. A "Bước 3" of a procedure is a real location and a
+    perfectly good citation, but nothing cites it as an article and an anchor that could mean
+    a step or an article would resolve to whichever came first.
+
+    A point with no clause above it is dropped rather than appended. `"12a"` would be
+    indistinguishable from Điều 12a — an inserted article, which Vietnamese amendments create
+    routinely — and an anchor is a join key: an ambiguous one resolves to the wrong text
+    silently. The citation label keeps it, because a human reading "Điều 12a" has the
+    surrounding document to disambiguate and a join does not.
+    """
+    location = _location_of(path)
+    if location.article is None:
+        return None
+    if location.clause is None:
+        return location.article
+    return f"{location.article}.{location.clause}{location.point or ''}"
+
+
+def anchor_families(anchors: Iterable[str]) -> list[str]:
+    """The locations a set of anchors could match, including each one's article.
+
+    A reference to `"12.2"` is answered by a chunk anchored there — and, when the chunker
+    merged two short clauses, by the chunk anchored at `"12"` that contains it. Both are
+    fetched in one pass; which one *wins* is `anchor_matches`' and the caller's business.
+    """
+    wanted = [anchor.strip() for anchor in anchors if anchor and anchor.strip()]
+    return sorted({*wanted, *(anchor.split(".")[0] for anchor in wanted)})
+
+
+def anchor_matches(chunk_anchor: str | None, family: str) -> bool:
+    """Whether a chunk sits at this location or beneath it.
+
+    An anchor addresses a *location*, and a location contains everything under it: `"12"` is
+    Điều 12 and every clause of it, `"12.2"` is that clause. Prefix on the dotted form, which
+    is exact where a naked prefix would not be — `"12"` reaches `"12.1"` and never `"12a"`,
+    because Điều 12a is a different article that amendments insert routinely.
+
+    One definition, used by the reference resolver and by the expiry projection. They ask the
+    same question of the same column, and two answers to it would mean a reference resolving
+    to text that a partial expiry did not take out of service, or the reverse.
+    """
+    if not chunk_anchor:
+        return False
+    return chunk_anchor == family or chunk_anchor.startswith(f"{family}.")
+
+
 def build_citation_label(path: list[str], legal_number: str | None = None) -> str:
     """Human-quotable citation, e.g. "Điều 12.2, TT 41/2016/TT-NHNN".
 
     Article and clause collapse into the dotted form lawyers actually write; anything above
     the article is context the citation does not need.
     """
-    article = next((p for p in path if p.startswith(("Điều", "Article"))), None)
-    clause = next((p for p in path if p.startswith("Khoản")), None)
-    point = next((p for p in path if p.startswith("Điểm")), None)
+    found = _location_of(path)
 
-    if article:
-        location = article
-        if clause:
-            location += f".{clause.split()[-1]}"
-        if point:
-            location += f"{point.split()[-1]}"
+    if found.article_label:
+        location = found.article_label
+        if found.clause:
+            location += f".{found.clause}"
+        if found.point:
+            location += found.point
     else:
         location = path[-1] if path else ""
 

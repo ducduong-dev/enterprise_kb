@@ -242,9 +242,9 @@ def add_pending_ref(session: Session, row: PendingDocumentRefRow) -> PendingDocu
         text(
             """
             INSERT INTO pending_document_refs (id, src_document_id, target_legal_number,
-                target_key, ref_type, articles, detected_by, created_at)
+                target_key, ref_type, articles, anchors, detected_by, created_at)
             VALUES (:id, :src, :number, :key, CAST(:ref_type AS ref_type),
-                CAST(:articles AS INT[]), :detected_by, :created_at)
+                CAST(:articles AS INT[]), CAST(:anchors AS TEXT[]), :detected_by, :created_at)
             ON CONFLICT ON CONSTRAINT uq_pending_ref DO NOTHING
             """
         ),
@@ -255,6 +255,7 @@ def add_pending_ref(session: Session, row: PendingDocumentRefRow) -> PendingDocu
             "key": row.target_key,
             "ref_type": row.ref_type,
             "articles": list(row.articles) if row.articles else None,
+            "anchors": list(row.anchors) if row.anchors else None,
             "detected_by": row.detected_by,
             "created_at": row.created_at,
         },

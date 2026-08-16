@@ -175,6 +175,7 @@ async def run_idp(request: IngestRequest) -> IdpOutcome:
             DetectedRefOut(
                 legal_number=ref.legal_number,
                 ref_type=ref.ref_type_guess,
+                anchors=list(ref.anchors),
                 block_id=ref.block_id,
                 confidence=ref.confidence,
             )
@@ -317,6 +318,7 @@ async def link_detected_refs(document_id: str, refs: list[DetectedRefOut]) -> li
                 DetectedRefIn(
                     legal_number=ref.legal_number,
                     ref_type=_safe_ref_type(ref.ref_type),
+                    anchors=list(ref.anchors),
                     detected_by="idp",
                 )
                 for ref in refs

@@ -38,6 +38,15 @@ class AuditAction:
     #: decides what a point-in-time query returns, so the change is worth a name of its own.
     VERSION_UPDATE = "version_update"
     PUBLISH = "publish"
+    #: A document's expiry proposed, confirmed or withdrawn. Named separately from
+    #: VERSION_UPDATE because it takes a document out of service rather than correcting a
+    #: field, and "who decided this instrument stopped applying" is a question an auditor asks
+    #: directly (ADR-0030).
+    EXPIRY_DECISION = "expiry_decision"
+    #: One clause recorded as replaced by another — proposed, confirmed or withdrawn. Named
+    #: apart from EXPIRY_DECISION because it answers a different question: not "did this rule
+    #: end" but "what applies instead" (ADR-0033).
+    CLAUSE_SUPERSESSION = "clause_supersession"
     PII_OVERRIDE = "pii_override"
     PII_BLOCK = "pii_block"
     REVIEW_DECISION = "review_decision"

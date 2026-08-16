@@ -217,6 +217,68 @@ def guess_ref_type(text: str, mention_start: int) -> str:
     return "cites"
 
 
+#: How far back from a mention an anchor may sit. Shorter than the ref-type window on purpose:
+#: "khoản 2 Điều 12 Thông tư 41/2016" is a tight phrase, and reaching further back starts
+#: collecting the article numbers of *neighbouring* citations in a list.
+_ANCHOR_WINDOW = 80
+
+#: "Điều 12", "Điều 12a", "Article 12" — with an optional list tail: "Điều 5, 6 và 7".
+_ANCHOR_ARTICLE = re.compile(
+    r"(?:Điều|Dieu|Article)\s+(\d{1,3}[a-zđ]?)"
+    r"((?:\s*(?:,|và|va|and)\s*\d{1,3}[a-zđ]?)*)",
+    re.IGNORECASE,
+)
+_ANCHOR_LIST_TAIL = re.compile(r"(\d{1,3}[a-zđ]?)")
+#: "khoản 2", "clause 2". Immediately before the article in Vietnamese citation order.
+_ANCHOR_CLAUSE = re.compile(r"(?:khoản|khoan|clause)\s+(\d{1,2})", re.IGNORECASE)
+#: "điểm a", "point a".
+_ANCHOR_POINT = re.compile(r"(?:điểm|diem|point)\s+([a-hjklmnopqrstuvxyzđ])\b", re.IGNORECASE)
+
+
+def find_anchors(text: str, mention_start: int) -> list[str]:
+    """Which clauses of the cited instrument this reference names.
+
+    Vietnamese citations run inside-out and sit *before* the instrument number: *"điểm a khoản
+    3 Điều 8 Nghị định 88/2019/NĐ-CP"*. So the window before the mention is where the address
+    is, exactly as it is for `guess_ref_type`.
+
+    Returns the bare dotted form `build_anchor` emits — `"12"`, `"12.2"`, `"8.3a"` — so an
+    anchor read from citing text is directly comparable to the anchor stored on the cited
+    document's chunks. Empty when the citation names no article, which is the common case:
+    *"theo quy định tại Thông tư 41/2016/TT-NHNN"* cites the whole instrument, and inventing an
+    article for it would resolve a general reference to one arbitrary clause.
+
+    A citation naming several articles — *"các Điều 5, 6 và 7"* — yields one anchor each. Only
+    the last article in such a list can carry a clause, because that is the only one Vietnamese
+    drafting attaches one to.
+    """
+    window = text[max(0, mention_start - _ANCHOR_WINDOW) : mention_start]
+    # The article nearest the instrument number is the one it belongs to: in "Điều 5 của
+    # Thông tư X và Điều 9 của Thông tư Y", each number takes the article on its left.
+    found = list(_ANCHOR_ARTICLE.finditer(window))
+    if not found:
+        return []
+    match = found[-1]
+
+    articles = [match.group(1), *_ANCHOR_LIST_TAIL.findall(match.group(2) or "")]
+    # The clause and point must sit *before* this article, or they belong to another citation.
+    prefix = window[: match.start()]
+    clause = _last(_ANCHOR_CLAUSE, prefix)
+    point = _last(_ANCHOR_POINT, prefix) if clause else None
+
+    anchors = [article.lower() for article in articles]
+    if clause and len(anchors) == 1:
+        anchors[0] = f"{anchors[0]}.{clause}{point or ''}"
+    return anchors
+
+
+def _last(pattern: re.Pattern[str], text: str) -> str | None:
+    """The last match's first group, or None. "Last" because the nearest one to the article is
+    the one that belongs to the citation being read."""
+    found = pattern.findall(text)
+    return str(found[-1]).lower() if found else None
+
+
 def find_document_number(text: str, *, max_chars: int = 2000) -> LegalNumber | None:
     """The instrument number of the document *itself*, if it declares one.
 

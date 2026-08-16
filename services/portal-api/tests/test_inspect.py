@@ -20,7 +20,7 @@ from kb_authz.principal import Role
 from kb_common.audit import AuditAction, InMemoryAuditSink
 from kb_common.config import get_settings, reset_settings_cache
 from kb_common.db import get_session
-from kb_common.errors import NotFound
+from kb_common.errors import GateBlocked, NotFound, ValidationError
 from kb_idp.builder import KBDocBuilder
 from kb_portal_api.auth import reset_verifier_cache
 from kb_portal_api.inspect import InspectService
@@ -456,14 +456,20 @@ def test_the_edge_appears_when_the_target_is_finally_ingested(
     edges, so a missing one is silence."""
     from kb_registry.schemas import DetectedRefIn
 
+    # Unique per run. The test's premise is "a document the registry does not hold", and a
+    # hard-coded number cannot express that on a machine where the platform is actually used:
+    # a real upload carrying the same number promotes the reference immediately and the test
+    # fails for a reason that has nothing to do with the pending-reference path.
+    absent = f"{uuid.uuid4().int % 900 + 100}/2025/NĐ-CP-{uuid.uuid4().hex[:6].upper()}"
+
     corpus.registry.link_detected_refs(
         corpus.circular,
-        [DetectedRefIn(legal_number="118/2025/NĐ-CP", ref_type=RefType.AMENDS, detected_by="idp")],
+        [DetectedRefIn(legal_number=absent, ref_type=RefType.AMENDS, detected_by="idp")],
     )
     corpus.session.flush()
     assert inspector.inspect(corpus.circular, principal()).pending
 
-    late = corpus.publish("Nghị định đến sau", legal_number="118/2025/NĐ-CP")
+    late = corpus.publish("Nghị định đến sau", legal_number=absent)
 
     inspection = inspector.inspect(corpus.circular, principal())
     assert not inspection.pending, "the parked reference should have been promoted"
@@ -614,3 +620,295 @@ def test_the_registry_listing_does_not_name_documents_the_caller_cannot_read(
     titles = {row["title"] for row in response.json()}
     assert "Thông tư về dự trữ bắt buộc" in titles
     assert "Ghi chú nội bộ của Ban pháp chế" not in titles
+
+
+# ------------------------------------------------------------------ expiry panel (M9a)
+
+
+def _proposal(inspector: InspectService, document_id: uuid.UUID, actor: str = "user_retail_staff"):  # type: ignore[no-untyped-def]
+    return inspector.mark_expired(
+        document_id,
+        principal(actor),
+        effective_to=date(2026, 12, 31),
+        evidence="Bị thay thế bởi Thông tư 15/2026 có hiệu lực từ 01/01/2027.",
+    )
+
+
+def test_the_panel_shows_what_is_in_force_and_where_it_came_from(
+    corpus: Corpus, inspector: InspectService
+) -> None:
+    panel = inspector.inspect(corpus.circular, principal()).expiry
+    assert panel.in_force is None
+    assert panel.history == []
+
+    row = _proposal(inspector, corpus.circular)
+    inspector.decide_expiry(corpus.circular, uuid.UUID(row["row_id"]), principal(), confirm=True)
+
+    panel = inspector.inspect(corpus.circular, principal()).expiry
+    assert panel.in_force == "2026-12-31"
+    assert panel.in_force_source == "ledger"
+
+
+def test_the_panel_keeps_the_whole_sequence_and_marks_the_open_row(
+    corpus: Corpus, inspector: InspectService
+) -> None:
+    """ "Why did this disappear from search in May, and who decided that?" is answered by
+    reading down this list — nothing is ever deleted (ADR-0030)."""
+    row = _proposal(inspector, corpus.circular)
+    confirmed = inspector.decide_expiry(
+        corpus.circular, uuid.UUID(row["row_id"]), principal(), confirm=True
+    )
+    inspector.decide_expiry(
+        corpus.circular,
+        uuid.UUID(confirmed["row_id"]),
+        principal(),
+        confirm=False,
+        reason="đọc nhầm điều khoản bãi bỏ",
+    )
+
+    panel = inspector.inspect(corpus.circular, principal()).expiry
+    assert [row.state for row in panel.history] == ["proposed", "confirmed", "revoked"]
+    assert [row.open for row in panel.history] == [False, False, True]
+    assert len(panel.current) == 1
+    assert panel.in_force is None, "revoking put the document back"
+
+
+def test_the_panel_carries_both_clocks_and_the_evidence(
+    corpus: Corpus, inspector: InspectService
+) -> None:
+    row = _proposal(inspector, corpus.circular)
+    view = inspector.inspect(corpus.circular, principal()).expiry.history[0]
+
+    assert view.row_id == uuid.UUID(row["row_id"])
+    assert view.effective_to == "2026-12-31", "when it stopped applying in the world"
+    assert view.created_at, "when this platform started believing it"
+    assert "Thông tư 15/2026" in (view.evidence or "")
+    assert view.basis == "steward"
+    assert view.detected_by == principal().audit_actor, (
+        "a steward's own proposal records the person, so four eyes can see them"
+    )
+
+
+def test_the_version_date_stays_visible_beside_the_ledgers(
+    corpus: Corpus, inspector: InspectService, session: Session
+) -> None:
+    """A steward who typed an end date into a rate schedule has to see why a different one is
+    in force, or the screen is lying by omission (ADR-0030)."""
+    session.execute(
+        __import__("sqlalchemy").text(
+            "UPDATE document_versions SET effective_to = DATE '2030-06-30' "
+            "WHERE document_id = :id AND is_canonical"
+        ),
+        {"id": corpus.circular},
+    )
+    session.flush()
+    row = _proposal(inspector, corpus.circular)
+    inspector.decide_expiry(corpus.circular, uuid.UUID(row["row_id"]), principal(), confirm=True)
+
+    inspection = inspector.inspect(corpus.circular, principal())
+    assert inspection.expiry.version_effective_to == "2030-06-30"
+    assert inspection.expiry.in_force == "2026-12-31"
+    assert any("sổ quyết định được ưu tiên" in w for w in inspection.warnings)
+
+
+def test_a_pending_proposal_is_warned_about_and_changes_nothing(
+    corpus: Corpus, inspector: InspectService
+) -> None:
+    _proposal(inspector, corpus.circular)
+    inspection = inspector.inspect(corpus.circular, principal())
+
+    assert inspection.expiry.in_force is None
+    assert any("chờ xác nhận" in w for w in inspection.warnings)
+
+
+def test_a_confirmed_partial_expiry_names_the_clauses_it_ended(
+    corpus: Corpus, inspector: InspectService
+) -> None:
+    """A partially expired document stays published, and the screen has to say which clauses
+    went so nobody reads "published" as "wholly in force" (ADR-0040)."""
+    row = inspector.mark_expired(
+        corpus.circular,
+        principal(),
+        effective_to=date(2026, 12, 31),
+        evidence="Bãi bỏ khoản 2 Điều 12 theo Thông tư 15/2026.",
+        anchors=["12.2"],
+    )
+    decision = inspector.decide_expiry(
+        corpus.circular, uuid.UUID(row["row_id"]), principal(), confirm=True
+    )
+
+    assert decision["state"] == "confirmed"
+    inspection = inspector.inspect(corpus.circular, principal())
+    assert inspection.expiry.in_force is None, "the document as a whole is still in force"
+    assert any("Một số điều khoản đã hết hiệu lực" in w for w in inspection.warnings)
+
+
+def test_confirming_takes_the_document_out_of_the_default_path(
+    corpus: Corpus, inspector: InspectService, session: Session
+) -> None:
+    """The action's real effect: the dates land on the chunks in this transaction, so the
+    document leaves search on its date with no scheduled job involved (ADR-0031)."""
+    row = _proposal(inspector, corpus.circular)
+    decision = inspector.decide_expiry(
+        corpus.circular, uuid.UUID(row["row_id"]), principal(), confirm=True
+    )
+
+    assert decision["applied"] is True
+    assert decision["chunks_projected"] > 0
+    still_served = session.execute(
+        __import__("sqlalchemy").text(
+            "SELECT count(*) FROM chunks WHERE document_id = :id AND NOT tombstoned "
+            "AND (effective_to IS NULL OR effective_to >= DATE '2027-01-01')"
+        ),
+        {"id": corpus.circular},
+    ).scalar()
+    assert still_served == 0
+
+
+def test_marking_a_document_expired_needs_a_stated_reason(
+    corpus: Corpus, inspector: InspectService
+) -> None:
+    """An expiry with no reason cannot be reviewed years later, which is when it will be."""
+    with pytest.raises(ValidationError):
+        inspector.mark_expired(
+            corpus.circular, principal(), effective_to=date(2026, 12, 31), evidence="   "
+        )
+
+
+def test_a_document_the_caller_cannot_read_cannot_be_expired(
+    corpus: Corpus, inspector: InspectService
+) -> None:
+    """The action inherits the read filter: you cannot withdraw what you may not see."""
+    with pytest.raises(NotFound):
+        inspector.mark_expired(
+            corpus.secret,
+            principal("user_it_engineer"),
+            effective_to=date(2026, 12, 31),
+            evidence="Không được phép đọc văn bản này.",
+        )
+
+
+def test_a_row_from_another_document_is_refused(corpus: Corpus, inspector: InspectService) -> None:
+    """The row id is a path parameter; it must not be a way to act on a different document."""
+    row = _proposal(inspector, corpus.circular)
+    with pytest.raises(NotFound):
+        inspector.decide_expiry(corpus.policy, uuid.UUID(row["row_id"]), principal(), confirm=True)
+
+
+def test_a_regulated_document_needs_a_second_pair_of_eyes(
+    corpus: Corpus, inspector: InspectService, session: Session
+) -> None:
+    """Withdrawing what the bank tells people changes what the bank tells people as surely as
+    publishing does, which is what INV-8 exists for."""
+    session.execute(
+        __import__("sqlalchemy").text(
+            "UPDATE documents SET doc_class = 'regulatory' WHERE id = :id"
+        ),
+        {"id": corpus.circular},
+    )
+    session.flush()
+    row = _proposal(inspector, corpus.circular, actor="user_retail_staff")
+
+    with pytest.raises(GateBlocked, match="four-eyes"):
+        inspector.decide_expiry(
+            corpus.circular, uuid.UUID(row["row_id"]), principal("user_retail_staff"), confirm=True
+        )
+
+    decision = inspector.decide_expiry(
+        corpus.circular, uuid.UUID(row["row_id"]), principal("user_legal_counsel"), confirm=True
+    )
+    assert decision["state"] == "confirmed"
+
+
+def test_a_machine_proposal_on_a_regulated_document_needs_exactly_one_human(
+    corpus: Corpus, inspector: InspectService, session: Session
+) -> None:
+    """`detected_by` is a detector, never an actor, so it can never collide with the confirmer.
+    That is ADR-0030's "a detector writes proposed, a human confirms", enforced."""
+    from kb_registry.expiry import ExpiryLedger
+    from kb_schemas.enums import ExpiryBasis
+
+    session.execute(
+        __import__("sqlalchemy").text(
+            "UPDATE documents SET doc_class = 'regulatory' WHERE id = :id"
+        ),
+        {"id": corpus.circular},
+    )
+    session.flush()
+    proposed = ExpiryLedger(session).propose(
+        corpus.circular,
+        effective_to=date(2026, 12, 31),
+        basis=ExpiryBasis.ABROGATED_BY,
+        detected_by="abrogates_edge:1",
+        actor="system",
+        source_document_id=corpus.amendment,
+        evidence="Thông tư sửa đổi bãi bỏ văn bản này.",
+    )
+
+    decision = inspector.decide_expiry(corpus.circular, proposed.row_id, principal(), confirm=True)
+    assert decision["state"] == "confirmed"
+
+
+def test_the_expiry_names_the_instrument_that_ended_it(
+    corpus: Corpus, inspector: InspectService, session: Session
+) -> None:
+    from kb_registry.expiry import ExpiryLedger
+    from kb_schemas.enums import ExpiryBasis
+
+    ExpiryLedger(session).propose(
+        corpus.circular,
+        effective_to=date(2026, 12, 31),
+        basis=ExpiryBasis.ABROGATED_BY,
+        detected_by="abrogates_edge:1",
+        actor="system",
+        source_document_id=corpus.amendment,
+        evidence="Thông tư sửa đổi bãi bỏ văn bản này.",
+    )
+
+    view = inspector.inspect(corpus.circular, principal()).expiry.history[0]
+    assert view.source_document_id == corpus.amendment
+    assert view.source_title == "Thông tư sửa đổi Điều 6"
+
+
+def test_expiring_a_document_needs_the_steward_role(client: TestClient, corpus: Corpus) -> None:
+    """Reading this screen is for anyone who may read the document. Withdrawing it from every
+    answer the platform gives is not."""
+    body = {
+        "effective_to": "2026-12-31",
+        "evidence": "Bị thay thế bởi Thông tư 15/2026 có hiệu lực từ 01/01/2027.",
+    }
+    refused = client.post(
+        f"/v1/documents/{corpus.circular}/expiry", json=body, headers=auth("u-reader", [])
+    )
+    assert refused.status_code == 403
+
+    allowed = client.post(
+        f"/v1/documents/{corpus.circular}/expiry",
+        json=body,
+        headers=auth("u-steward", [Role.STEWARD]),
+    )
+    assert allowed.status_code == 200
+    proposal = allowed.json()
+    assert proposal["state"] == "proposed"
+    assert proposal["applied"] is False
+
+    decided = client.post(
+        f"/v1/documents/{corpus.circular}/expiry/{proposal['row_id']}",
+        json={"confirm": True},
+        headers=auth("u-approver", [Role.STEWARD]),
+    )
+    assert decided.status_code == 200
+    assert decided.json()["state"] == "confirmed"
+    assert decided.json()["applied"] is True
+
+
+def test_an_expiry_without_a_reason_is_refused_at_the_edge(
+    client: TestClient, corpus: Corpus
+) -> None:
+    """Validation, not a service-layer surprise: the reason is what an auditor reads later."""
+    response = client.post(
+        f"/v1/documents/{corpus.circular}/expiry",
+        json={"effective_to": "2026-12-31", "evidence": "sai"},
+        headers=auth("u-steward", [Role.STEWARD]),
+    )
+    assert response.status_code == 422

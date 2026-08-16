@@ -87,3 +87,17 @@ def _has_tone_mark(ch: str) -> bool:
     return len(decomposed) > 1 and any(
         unicodedata.category(part) == "Mn" for part in decomposed[1:]
     )
+
+
+def fold_diacritics(text: str) -> str:
+    """Strip Vietnamese tone marks and fold `đ` to `d`.
+
+    The folding the keyword index is built on: `to_tsvector('simple', kb_unaccent(text))` on
+    the write side has to be matched exactly on the read side, or a query with tone marks
+    misses a document that has them too. Shared rather than re-implemented per call site
+    (ADR-0007) — three copies of this is three chances for one of them to fold `đ` and the
+    others not to, which shows up as a search that quietly misses a fifth of the corpus.
+    """
+    decomposed = unicodedata.normalize("NFD", text)
+    stripped = "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
+    return stripped.replace("đ", "d").replace("Đ", "D")

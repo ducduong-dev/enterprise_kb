@@ -17,10 +17,14 @@ import {
   ChunkView,
   DocumentInspection,
   EdgeView,
+  ExpiryPanel,
+  ExpiryView,
   RechunkResult,
   decideEdge,
+  decideExpiry,
   inspectDocument,
   listDocumentChunks,
+  proposeExpiry,
   rechunkDocument,
 } from "../api";
 
@@ -39,6 +43,19 @@ const REF_LABEL: Record<string, string> = {
   cites: "Trích dẫn",
   consolidates: "Hợp nhất",
   related: "Liên quan",
+};
+
+const EXPIRY_STATE_LABEL: Record<string, string> = {
+  proposed: "Đề xuất",
+  confirmed: "Đã xác nhận",
+  revoked: "Đã thu hồi",
+};
+
+const EXPIRY_BASIS_LABEL: Record<string, string> = {
+  self_stated: "Văn bản tự quy định",
+  abrogated_by: "Bị văn bản khác bãi bỏ",
+  declared_by: "Văn bản khác tuyên bố thay thế",
+  steward: "Do cán bộ quản lý xác định",
 };
 
 const PII_LABEL: Record<string, string> = {
@@ -139,6 +156,155 @@ function EgoMap({
         Trỏ tới
       </text>
     </svg>
+  );
+}
+
+/**
+ * The expiry ledger for one document.
+ *
+ * Built around the two questions a steward actually has. *What is in force* — one date, and
+ * where it came from, because the ledger and the version can disagree and the ledger wins.
+ * *How did it get that way* — the whole sequence, since nothing is ever deleted and "why did
+ * this vanish from search in May" is answered by reading down it (ADR-0030).
+ *
+ * A proposal is visibly inert: it says so, because the gap between proposing and confirming is
+ * the entire safety property and a screen that blurs it would undo the design.
+ */
+function ExpirySection({
+  panel,
+  busy,
+  onPropose,
+  onDecide,
+}: {
+  panel: ExpiryPanel;
+  busy: boolean;
+  onPropose: (effectiveTo: string, evidence: string) => void;
+  onDecide: (row: ExpiryView, confirm: boolean) => void;
+}) {
+  const [effectiveTo, setEffectiveTo] = useState("");
+  const [evidence, setEvidence] = useState("");
+  const proposing = panel.current.filter((row) => row.state === "proposed");
+
+  return (
+    <section className="inspect__block">
+      <h2>Hiệu lực</h2>
+
+      <p className="inspect__meta">
+        {panel.in_force ? (
+          <>
+            Hết hiệu lực từ sau <strong>{panel.in_force}</strong>{" "}
+            {panel.in_force_source === "ledger"
+              ? "(theo sổ quyết định)"
+              : "(theo phiên bản văn bản)"}
+          </>
+        ) : (
+          "Đang còn hiệu lực."
+        )}
+        {panel.version_effective_to && panel.version_effective_to !== panel.in_force && (
+          <>
+            {" · "}Ngày ghi trên phiên bản: {panel.version_effective_to}
+          </>
+        )}
+      </p>
+
+      {proposing.length > 0 && (
+        <p className="hint">
+          Đề xuất đang chờ xác nhận — chưa ảnh hưởng đến kết quả tìm kiếm.
+        </p>
+      )}
+
+      {panel.history.length > 0 && (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>Hết hiệu lực</th>
+              <th>Trạng thái</th>
+              <th>Căn cứ</th>
+              <th>Phạm vi</th>
+              <th>Ghi nhận lúc</th>
+              <th>Người quyết định</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {panel.history.map((row) => (
+              <tr key={row.row_id} className={row.open ? "" : "row--closed"}>
+                <td>{row.effective_to}</td>
+                <td>{EXPIRY_STATE_LABEL[row.state] ?? row.state}</td>
+                <td>
+                  {EXPIRY_BASIS_LABEL[row.basis] ?? row.basis}
+                  {row.source_title && <> — {row.source_title}</>}
+                  {row.evidence && <div className="hint">{row.evidence}</div>}
+                </td>
+                <td>
+                  {row.partial ? (
+                    <>
+                      {row.anchors.join(", ")}
+                      <div className="warn">chưa được áp dụng</div>
+                    </>
+                  ) : (
+                    "Toàn văn bản"
+                  )}
+                </td>
+                {/* The second clock: when this platform believed it, not when it was true. */}
+                <td>{row.created_at.slice(0, 10)}</td>
+                <td>{row.decided_by ?? row.detected_by}</td>
+                <td>
+                  {row.open && row.state === "proposed" && (
+                    <button disabled={busy} onClick={() => onDecide(row, true)}>
+                      Xác nhận
+                    </button>
+                  )}
+                  {row.open && row.state === "confirmed" && (
+                    <button disabled={busy} onClick={() => onDecide(row, false)}>
+                      Thu hồi
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+
+      <form
+        className="inspect__expiry-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          onPropose(effectiveTo, evidence);
+          setEffectiveTo("");
+          setEvidence("");
+        }}
+      >
+        <label>
+          Ngày cuối còn hiệu lực
+          <input
+            type="date"
+            value={effectiveTo}
+            required
+            onChange={(event) => setEffectiveTo(event.target.value)}
+          />
+        </label>
+        <label>
+          Căn cứ
+          <input
+            type="text"
+            value={evidence}
+            required
+            minLength={10}
+            placeholder="Câu trong văn bản, hoặc lý do của cán bộ quản lý"
+            onChange={(event) => setEvidence(event.target.value)}
+          />
+        </label>
+        <button type="submit" disabled={busy}>
+          Đề xuất hết hiệu lực
+        </button>
+      </form>
+      <p className="hint">
+        Đề xuất không thay đổi kết quả tìm kiếm. Chỉ khi được xác nhận, văn bản mới ngừng xuất
+        hiện — kể từ ngày đã ghi, không cần chờ tác vụ nền.
+      </p>
+    </section>
   );
 }
 
@@ -261,6 +427,46 @@ export function DocumentDetail({ documentId }: { documentId: string }) {
     }
   }
 
+  async function onProposeExpiry(effectiveTo: string, evidence: string) {
+    setBusy(true);
+    try {
+      await proposeExpiry(documentId, { effective_to: effectiveTo, evidence });
+      setNotice("Đã ghi nhận đề xuất hết hiệu lực. Chưa ảnh hưởng đến kết quả tìm kiếm.");
+      load();
+    } catch (err) {
+      setError((err as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDecideExpiry(row: ExpiryView, confirm: boolean) {
+    // Confirming removes the document from every default answer from its date. Worth one
+    // deliberate click, and worth naming the date in the question rather than "are you sure".
+    const question = confirm
+      ? `Xác nhận văn bản hết hiệu lực sau ngày ${row.effective_to}? Văn bản sẽ không còn xuất hiện trong tìm kiếm và trả lời.`
+      : "Thu hồi quyết định hết hiệu lực? Văn bản sẽ được phục vụ trở lại.";
+    if (!window.confirm(question)) return;
+    const reason = confirm ? "" : window.prompt("Lý do thu hồi:") ?? "";
+    if (!confirm && !reason.trim()) return;
+    setBusy(true);
+    try {
+      const result = await decideExpiry(documentId, row.row_id, { confirm, reason });
+      setNotice(
+        result.applied
+          ? confirm
+            ? `Đã xác nhận. ${result.chunks_projected} đoạn được cập nhật ngày hết hiệu lực.`
+            : "Đã thu hồi. Văn bản được phục vụ trở lại."
+          : `Đã ghi nhận nhưng chưa áp dụng: ${result.note}`,
+      );
+      load();
+    } catch (err) {
+      setError((err as ApiError).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onDecide(edge: EdgeView, confirm: boolean) {
     if (!confirm && !window.confirm("Gỡ liên kết này khỏi đồ thị?")) return;
     setBusy(true);
@@ -337,6 +543,13 @@ export function DocumentDetail({ documentId }: { documentId: string }) {
           </tbody>
         </table>
       </section>
+
+      <ExpirySection
+        panel={data.expiry}
+        busy={busy}
+        onPropose={onProposeExpiry}
+        onDecide={onDecideExpiry}
+      />
 
       <section className="inspect__block">
         <h2>Liên kết</h2>

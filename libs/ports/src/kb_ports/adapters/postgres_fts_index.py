@@ -14,13 +14,13 @@ is what makes "an toan von" find "an toàn vốn".
 from __future__ import annotations
 
 import re
-import unicodedata
 from collections.abc import Sequence
 from uuid import UUID
 
 from kb_authz.compile import compile_sql
 from kb_authz.filters import ResolvedFilter
 from kb_common.logging import get_logger
+from kb_vntext.language import fold_diacritics
 from kb_vntext.legal_numbers import query_terms
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -77,7 +77,7 @@ class PostgresFtsIndexAdapter:
                            to_tsquery('simple', :highlight_query) AS tsq_display
                 )
                 SELECT c.id, c.document_id, c.version_id, c.text, c.citation_label,
-                       c.section_path,
+                       c.section_path, c.article,
                        ts_rank_cd(to_tsvector('simple', kb_unaccent(c.text)), q.tsq) AS score,
                        ts_headline('simple', c.text, q.tsq_display,
                            'MaxWords={HIGHLIGHT_WORDS}, MinWords=5, ShortWord=2,'
@@ -101,6 +101,7 @@ class PostgresFtsIndexAdapter:
                 text=row["text"],
                 citation_label=row["citation_label"],
                 section_path=row["section_path"],
+                article=row["article"],
                 highlights=(row["highlight"],) if row["highlight"] else (),
             )
             for row in rows
@@ -136,9 +137,8 @@ def _terms(query: str) -> list[str]:
 
 
 def _fold(term: str) -> str:
-    decomposed = unicodedata.normalize("NFD", term)
-    stripped = "".join(ch for ch in decomposed if unicodedata.category(ch) != "Mn")
-    return stripped.replace("đ", "d")
+    """The index's folding, shared with every other reader of it (ADR-0007)."""
+    return fold_diacritics(term)
 
 
 @register_adapter(PortName.KEYWORD_INDEX, "postgres_fts")

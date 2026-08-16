@@ -5,10 +5,12 @@ from __future__ import annotations
 import pytest
 from kb_vntext.legal_numbers import (
     extract_legal_numbers,
+    find_anchors,
     find_document_number,
     guess_ref_type,
     normalize_legal_number,
 )
+from kb_vntext.sections import build_anchor
 
 
 @pytest.mark.parametrize(
@@ -101,3 +103,48 @@ def test_document_number_comes_from_the_header_not_the_body() -> None:
 
 def test_document_without_a_number_returns_none() -> None:
     assert find_document_number("Biểu phí dịch vụ khách hàng cá nhân năm 2026") is None
+
+
+# ---------------------------------------------------- reference anchors (M9b, ADR-0036)
+
+
+def _anchors(sentence: str, number: str) -> list[str]:
+    return find_anchors(sentence, sentence.index(number))
+
+
+@pytest.mark.parametrize(
+    ("sentence", "number", "expected"),
+    [
+        ("theo quy định tại Điều 12 Thông tư 41/2016/TT-NHNN", "41/2016", ["12"]),
+        ("quy định tại khoản 2 Điều 12 Thông tư 41/2016/TT-NHNN", "41/2016", ["12.2"]),
+        ("điểm a khoản 3 Điều 8 Nghị định 88/2019/NĐ-CP", "88/2019", ["8.3a"]),
+        ("các Điều 5, 6 và 7 Thông tư 41/2016/TT-NHNN", "41/2016", ["5", "6", "7"]),
+        ("as set out in Article 12 of Circular 41/2016/TT-NHNN", "41/2016", ["12"]),
+        ("bãi bỏ khoản 2 Điều 12 Thông tư 10/2022/TT-NHNN", "10/2022", ["12.2"]),
+        ("sửa đổi Điều 12a Thông tư 10/2022/TT-NHNN", "10/2022", ["12a"]),
+    ],
+)
+def test_a_citation_yields_the_clauses_it_names(
+    sentence: str, number: str, expected: list[str]
+) -> None:
+    assert _anchors(sentence, number) == expected
+
+
+def test_a_reference_to_a_whole_instrument_names_no_clause() -> None:
+    """ "theo quy định tại Thông tư 41/2016" cites the instrument. Inventing an article for it
+    would resolve a general reference to one arbitrary clause."""
+    assert _anchors("theo quy định tại Thông tư 41/2016/TT-NHNN", "41/2016") == []
+
+
+def test_each_instrument_takes_the_article_on_its_left() -> None:
+    """A sentence citing two instruments must not give the second one the first's article."""
+    sentence = "Điều 5 của Thông tư 99/2020/TT-NHNN và khoản 2 Điều 9 của Thông tư 41/2016/TT-NHNN"
+    assert _anchors(sentence, "99/2020") == ["5"]
+    assert _anchors(sentence, "41/2016") == ["9.2"]
+
+
+def test_an_anchor_reads_back_as_the_form_the_chunks_carry() -> None:
+    """The extractor and the chunker must agree on what "12.2" means, or a reference resolves
+    to text the citation does not point at (ADR-0036)."""
+    sentence = "quy định tại khoản 2 Điều 12 Thông tư 41/2016/TT-NHNN"
+    assert _anchors(sentence, "41/2016") == [build_anchor(["Chương II", "Điều 12", "Khoản 2"])]

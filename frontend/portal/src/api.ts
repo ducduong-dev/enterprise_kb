@@ -445,6 +445,48 @@ export interface VersionView {
   change_summary: string | null;
 }
 
+/** One row of the expiry ledger. Nothing is ever updated, so this list only grows. */
+export interface ExpiryView {
+  row_id: string;
+  /** When it stopped applying in the world. */
+  effective_to: string;
+  basis: string;
+  state: "proposed" | "confirmed" | "revoked";
+  anchors: string[];
+  /** True when the row names clauses rather than the whole document. Recorded, not applied. */
+  partial: boolean;
+  evidence: string | null;
+  source_document_id: string | null;
+  source_title: string | null;
+  detected_by: string;
+  decided_by: string | null;
+  /** When this platform started believing it — the second clock (ADR-0030). */
+  created_at: string;
+  /** …and stopped. Null means this row is the current belief. */
+  closed_at: string | null;
+  open: boolean;
+}
+
+export interface ExpiryPanel {
+  /** The date retrieval actually evaluates. Null means the document is in force. */
+  in_force: string | null;
+  in_force_source: "ledger" | "version" | null;
+  version_effective_to: string | null;
+  current: ExpiryView[];
+  history: ExpiryView[];
+}
+
+export interface ExpiryDecisionResult {
+  row_id: string;
+  document_id: string;
+  effective_to: string;
+  state: string;
+  chunks_projected: number;
+  /** False when the row was recorded but nothing was projected — a partial expiry, today. */
+  applied: boolean;
+  note: string;
+}
+
 export interface PendingRef {
   legal_number: string;
   ref_type: string;
@@ -468,6 +510,7 @@ export interface DocumentInspection {
   chunks: ChunkView[];
   edges: EdgeView[];
   lineage: LineageEntry[];
+  expiry: ExpiryPanel;
   pending: PendingRef[];
   unreadable_edges: number;
   warnings: string[];
@@ -503,6 +546,37 @@ export function rechunkDocument(documentId: string): Promise<RechunkResult> {
   return request<RechunkResult>(
     `/v1/documents/${encodeURIComponent(documentId)}/rechunk`,
     { method: "POST" },
+  );
+}
+
+/** Propose that a document has stopped applying. Changes nothing until confirmed. */
+export function proposeExpiry(
+  documentId: string,
+  body: { effective_to: string; evidence: string; anchors?: string[] },
+): Promise<ExpiryDecisionResult> {
+  return request<ExpiryDecisionResult>(
+    `/v1/documents/${encodeURIComponent(documentId)}/expiry`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+/** Confirm a proposed expiry, or withdraw one. Confirming removes it from every default answer. */
+export function decideExpiry(
+  documentId: string,
+  rowId: string,
+  body: { confirm: boolean; reason?: string },
+): Promise<ExpiryDecisionResult> {
+  return request<ExpiryDecisionResult>(
+    `/v1/documents/${encodeURIComponent(documentId)}/expiry/${encodeURIComponent(rowId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
   );
 }
 

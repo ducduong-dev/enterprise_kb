@@ -26,7 +26,7 @@ from kb_schemas.kbdoc import (
 )
 from kb_vntext.dates import detect as detect_dates
 from kb_vntext.language import detect_language
-from kb_vntext.legal_numbers import extract_legal_numbers, guess_ref_type
+from kb_vntext.legal_numbers import extract_legal_numbers, find_anchors, guess_ref_type
 from kb_vntext.sections import SectionTracker
 
 #: How many leading blocks are considered when looking for the document's own number.
@@ -142,6 +142,8 @@ class KBDocBuilder:
                 issued_date=issued_date or (dates.issued.isoformat() if dates.issued else None),
                 effective_from=(dates.effective_from.isoformat() if dates.effective_from else None),
                 effective_evidence=dates.effective_evidence or None,
+                effective_to=(dates.effective_to.isoformat() if dates.effective_to else None),
+                expiry_evidence=dates.expiry_evidence or None,
             ),
             blocks=self._blocks,
             detected_refs=self._detect_refs(own_number),
@@ -210,6 +212,9 @@ class KBDocBuilder:
                         raw=number.raw,
                         legal_number=number.value,
                         ref_type_guess=ref_type,
+                        # Read from the same window the ref type is: Vietnamese citations run
+                        # inside-out and sit before the instrument number (ADR-0036).
+                        anchors=find_anchors(block.text, number.start),
                         block_id=block.id,
                         confidence=number.confidence,
                     )

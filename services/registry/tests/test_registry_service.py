@@ -320,3 +320,63 @@ def test_linking_the_same_reference_twice_does_not_duplicate_the_edge(
     second, _ = registry.link_detected_refs(source.id, refs)
     assert len(first) == 1
     assert second == []
+
+
+# ------------------------------------------------------- reference anchors (M9b)
+
+
+def test_an_edge_is_as_precise_as_the_citation_was(registry: RegistryService) -> None:
+    """A reference to "khoản 2 Điều 12" must not arrive as "somewhere in this circular"."""
+    target = registry.create_document(
+        spec(title="Thông tư đích", legal_number="55/2016/TT-ANCHOR"), actor="t"
+    )
+    source = registry.create_document(spec(title="Văn bản dẫn chiếu điều khoản"), actor="t")
+
+    registry.link_detected_refs(
+        source.id,
+        [DetectedRefIn(legal_number="55/2016/TT-ANCHOR", anchors=["12.2", "12.3"])],
+    )
+
+    edge = repo.get_edge(registry._session, source.id, target.id, RefType.CITES.value)
+    assert edge is not None
+    assert edge.anchors == ["12.2", "12.3"]
+    # Derived, never supplied: the impact traversal reads `articles` and the resolver reads
+    # `anchors`, and a reference meaning different things to the two is a policy owner told
+    # the wrong thing (ADR-0036).
+    assert edge.articles == [12]
+
+
+def test_a_reference_to_a_whole_instrument_keeps_no_anchors(registry: RegistryService) -> None:
+    target = registry.create_document(
+        spec(title="Thông tư đích", legal_number="56/2016/TT-ANCHOR"), actor="t"
+    )
+    source = registry.create_document(spec(title="Văn bản dẫn chiếu chung"), actor="t")
+
+    registry.link_detected_refs(source.id, [DetectedRefIn(legal_number="56/2016/TT-ANCHOR")])
+
+    edge = repo.get_edge(registry._session, source.id, target.id, RefType.CITES.value)
+    assert edge is not None
+    assert edge.anchors is None, "NULL means the whole document, which is what was cited"
+
+
+def test_a_parked_reference_keeps_its_anchors_until_the_target_arrives(
+    registry: RegistryService,
+) -> None:
+    """An anchor dropped at parking time is one nobody can recover later — the citing text is
+    not read again (ADR-0028/0036)."""
+    source = registry.create_document(spec(title="Văn bản dẫn chiếu sớm"), actor="t")
+    registry.link_detected_refs(
+        source.id,
+        [DetectedRefIn(legal_number="57/2016/TT-ANCHOR", anchors=["8.3a"])],
+    )
+    parked = list(repo.pending_refs_from(registry._session, source.id))
+    assert [row.anchors for row in parked] == [["8.3a"]]
+
+    target = registry.create_document(
+        spec(title="Thông tư đến sau", legal_number="57/2016/TT-ANCHOR"), actor="t"
+    )
+    registry.resolve_pending_refs(target.id)
+
+    edge = repo.get_edge(registry._session, source.id, target.id, RefType.CITES.value)
+    assert edge is not None
+    assert edge.anchors == ["8.3a"]

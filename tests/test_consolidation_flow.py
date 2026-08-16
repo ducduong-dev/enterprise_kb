@@ -39,8 +39,8 @@ from kb_ports.adapters.postgres_fts_index import PostgresFtsIndexAdapter
 from kb_ports.adapters.rerank import LexicalRerankAdapter
 from kb_ports.adapters.storage_local import LocalStorageAdapter
 from kb_registry import repository as repo
+from kb_registry.publish import SUPERSEDED_PREDICATE, PublishService, is_superseded
 from kb_registry.publish import Approval as PublishApproval
-from kb_registry.publish import PublishService, is_superseded
 from kb_registry.schemas import DocumentCreate, VersionCreate
 from kb_registry.service import RegistryService
 from kb_retrieval_api.engine import RetrievalEngine
@@ -58,7 +58,7 @@ from kb_workflows.merge_activities import (
     publish_merged,
 )
 from kb_workflows.merge_policy import Approval, ApprovalLedger
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
 pytestmark = pytest.mark.integration
@@ -331,13 +331,70 @@ def test_an_amendment_makes_the_target_stale_in_retrieval(
 
 
 def test_the_two_supersession_queries_agree(corpus: Fixture, retrieval: RetrievalEngine) -> None:
-    """`is_superseded` and the engine's bulk query are the same predicate written twice."""
-    for document_id in (corpus.target, corpus.policy, corpus.amendment):
+    """`is_superseded` and the engine's bulk query are the same predicate written twice.
+
+    ADR-0015 accepted that it exists twice on purpose. ADR-0032 narrowed the retrieval-facing
+    half to articles, so agreement now has to be asserted at that granularity too — otherwise
+    the two could drift on *which* articles while still agreeing on the document set, which is
+    the drift that would actually reach a reader.
+    """
+    scope = {corpus.target, corpus.policy, corpus.amendment}
+    in_bulk = retrieval._superseded_articles(scope)
+    for document_id in scope:
         one_at_a_time = is_superseded(corpus.session, document_id)
-        in_bulk = document_id in retrieval._superseded_documents(
-            {corpus.target, corpus.policy, corpus.amendment}
-        )
-        assert one_at_a_time == in_bulk, document_id
+        assert one_at_a_time == (document_id in in_bulk), document_id
+
+    # And the article lists agree with the edges they were read from.
+    for document_id, articles in in_bulk.items():
+        from_edges = corpus.session.execute(
+            text(f"SELECT articles FROM ({SUPERSEDED_PREDICATE}) s WHERE s.dst_document_id = :id"),
+            {"id": document_id},
+        ).all()
+        expected: set[int] = set()
+        for row in from_edges:
+            if not row.articles:
+                expected = set()
+                break
+            expected |= set(row.articles)
+        assert articles == expected, document_id
+
+
+def test_an_amendment_naming_articles_flags_only_those(
+    corpus: Fixture, retrieval: RetrievalEngine
+) -> None:
+    """An amendment usually touches two or three articles of a sixty-article circular. A
+    banner over all sixty is a banner nobody reads, and the one article it was right about is
+    the one nobody notices (ADR-0032)."""
+    corpus.session.execute(
+        text(
+            "UPDATE document_refs SET articles = ARRAY[6] "
+            "WHERE src_document_id = :src AND dst_document_id = :dst AND ref_type = 'amends'"
+        ),
+        {"src": corpus.amendment, "dst": corpus.target},
+    )
+    corpus.session.commit()
+
+    response = retrieval.retrieve(
+        ALL_PRINCIPALS["user_retail_staff"],
+        RetrieveRequest(query=f"tỷ lệ dự trữ bắt buộc {MARKER}", top_k=20),
+    ).response
+    chunks = [chunk for chunk in response.chunks if chunk.document_id == corpus.target]
+    assert chunks, "the amended circular must still be retrievable"
+
+    flagged = {chunk.article for chunk in chunks if chunk.supersession_flag}
+    untouched = {chunk.article for chunk in chunks if not chunk.supersession_flag}
+    assert flagged == {6}
+    assert 6 not in untouched, "a chunk of Điều 6 must not come back unflagged"
+
+
+def test_an_edge_with_no_article_list_still_flags_everything(
+    corpus: Fixture, retrieval: RetrievalEngine
+) -> None:
+    """The failure direction flipped with ADR-0032: before, the flag over-warned; now a wrong
+    or missing article list under-warns, which is worse. This is the guard."""
+    superseded = retrieval._superseded_articles({corpus.target})
+    assert superseded[corpus.target] == set(), "no articles named means the whole document"
+    assert all(flags_for(retrieval, corpus.target))
 
 
 # --------------------------------------------------------------------- 2. the merge draft

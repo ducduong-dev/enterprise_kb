@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from kb_authz.principal import Principal
@@ -33,7 +34,13 @@ from kb_common.audit import AuditAction, AuditRecord, AuditSink
 from kb_common.errors import UpstreamError
 from kb_common.logging import get_logger
 from kb_ports.models import GenerationPort, Message, PiiDetectorPort
-from kb_schemas.api import ChatRequest, ChatResponse, RetrieveRequest, RetrieveResponse
+from kb_schemas.api import (
+    ChatRequest,
+    ChatResponse,
+    ExpiredMatch,
+    RetrieveRequest,
+    RetrieveResponse,
+)
 
 from kb_chat_api.condense import Condensed, QueryCondenser
 from kb_chat_api.context import AssembledContext, VerifiedAnswer, assemble, is_relevant, verify
@@ -122,6 +129,14 @@ class ChatService:
         retrieved = self._retrieve(request, trace, token, policy)
         context = assemble(retrieved.chunks)
         if context.empty:
+            # An expired instrument never reaches `context` — its chunks failed the
+            # effectivity predicate — so this is the only place the difference between "the
+            # bank never said anything" and "the bank said it, and it ended in December" can
+            # still be told (ADR-0030).
+            if retrieved.expired_matches:
+                return self._refuse(
+                    trace, policy, "expired", started, expired=retrieved.expired_matches
+                )
             return self._refuse(trace, policy, "no context", started)
         if not is_relevant(trace.condensed.query, context):
             # Retrieval always returns its best guesses. For a question the corpus cannot
@@ -217,14 +232,20 @@ class ChatService:
         )
 
     def _refuse(
-        self, trace: AnswerTrace, policy: SurfacePolicy, reason: str, started: float
+        self,
+        trace: AnswerTrace,
+        policy: SurfacePolicy,
+        reason: str,
+        started: float,
+        *,
+        expired: Sequence[ExpiredMatch] = (),
     ) -> ChatResponse:
         trace.refused = True
         trace.refusal_reason = reason
         trace.latency_ms = int((time.monotonic() - started) * 1000)
         self._record(trace)
         return ChatResponse(
-            answer=policy.refusal,
+            answer=policy.expired_refusal(expired),
             citations=[],
             answer_id=trace.answer_id,
             refused=True,

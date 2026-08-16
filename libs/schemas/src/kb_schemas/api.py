@@ -67,6 +67,9 @@ class RetrievedChunk(BaseModel):
     #: procedure. Both are needed to judge whether a passage answers a question.
     document_title: str | None = None
     section_path: str | None = None
+    #: Which article of the document this passage is. What the supersession warning is scoped
+    #: to, and what a reference resolves against (ADR-0032/0036).
+    article: int | None = None
     text: str
     score: float
     #: Matched fragments with <mark> around the terms, when the keyword engine produced them.
@@ -77,6 +80,30 @@ class RetrievedChunk(BaseModel):
     supersession_flag: bool = False
 
 
+class ResolvedAnchor(BaseModel):
+    """A cited clause, resolved to the passage it names.
+
+    A pointer, not a quotation. `excerpt` is enough for a portal to render the reference as a
+    readable link and for chat-api to decide whether the answer needs the full text — which it
+    then fetches through the ordinary retrieval path, where it passes the filter again and
+    becomes a real citation (ADR-0018/0036).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: As the citing document wrote it: "12", "12.2", "12.2a".
+    anchor: str
+    chunk_id: UUID
+    version_id: UUID
+    citation_label: str | None = None
+    #: An opening fragment, never the clause in full.
+    excerpt: str | None = None
+    #: True when the reference was detected before the target's current version was published.
+    #: A statement about confidence, not a failure: this anchor was read when the target looked
+    #: different, and a consolidation can renumber.
+    stale: bool = False
+
+
 class GraphExpansion(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -84,6 +111,28 @@ class GraphExpansion(BaseModel):
     ref_type: str
     summary: str | None = None
     citation_label: str | None = None
+    #: The clauses this reference names, resolved to passages under the caller's own filter.
+    anchors: list[ResolvedAnchor] = Field(default_factory=list)
+    #: Anchors the reference named that resolved to nothing — reported rather than dropped.
+    #: The target may number its articles differently, an amendment may have inserted one we
+    #: have not consolidated, or the reference may simply be wrong (ADR-0028/0036).
+    unresolved_anchors: list[str] = Field(default_factory=list)
+
+
+class ExpiredMatch(BaseModel):
+    """A document that would have answered, had it not ceased to apply.
+
+    Metadata only, and deliberately so: this is what turns silence into "that rule ceased on
+    31/12/2026" (ADR-0030). It is never a citation and carries no text — a citation to a
+    repealed rule is precisely what the expiry work exists to prevent (ADR-0018).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: UUID
+    document_title: str | None = None
+    citation_label: str | None = None
+    expired_on: date
 
 
 class RetrieveResponse(BaseModel):
@@ -91,7 +140,33 @@ class RetrieveResponse(BaseModel):
 
     chunks: list[RetrievedChunk] = Field(default_factory=list)
     expansions: list[GraphExpansion] = Field(default_factory=list)
+    #: Populated only when the funnel found nothing current. The answer says the rule ended
+    #: rather than that nothing was found.
+    expired_matches: list[ExpiredMatch] = Field(default_factory=list)
     #: Hash of the filter actually applied — joins this response to its audit record (INV-11).
+    resolved_filter_id: str
+
+
+class ResolveAnchorRequest(BaseModel):
+    """Resolve a reference the platform parsed itself.
+
+    Distinct from `CitationLookupRequest`, which trigram-matches text a *human* typed. Here the
+    document is already identified and the anchor is already structured, so resolution is an
+    equality join with no threshold to tune.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: UUID
+    anchors: list[str] = Field(min_length=1, max_length=32)
+    as_of_date: date | None = None
+
+
+class ResolveAnchorResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    resolved: list[ResolvedAnchor] = Field(default_factory=list)
+    unresolved: list[str] = Field(default_factory=list)
     resolved_filter_id: str
 
 

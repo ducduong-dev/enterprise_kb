@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import pytest
 from kb_vntext.language import detect_language
-from kb_vntext.sections import Level, SectionTracker, build_citation_label, parse_heading
+from kb_vntext.sections import (
+    Level,
+    SectionTracker,
+    build_anchor,
+    build_citation_label,
+    parse_heading,
+)
 
 
 @pytest.mark.parametrize(
@@ -114,3 +120,38 @@ def test_citation_labels_read_the_way_lawyers_write_them(
 )
 def test_language_detection(text: str, expected: str) -> None:
     assert detect_language(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        (["Chương II", "Điều 12", "Khoản 2"], "12.2"),
+        (["Điều 12"], "12"),
+        (["Chương II", "Điều 12", "Khoản 2", "Điểm a"], "12.2a"),
+        (["Điều 12a"], "12a"),
+        # A point with no clause above it: "12a" would be indistinguishable from Điều 12a,
+        # and an anchor is a join key — an ambiguous one resolves to the wrong text silently.
+        (["Điều 12", "Điểm a"], "12"),
+        # Not an article at all. A procedure's step is a real citation and not an anchor.
+        (["Mục 3"], None),
+        (["Bước 3"], None),
+        ([], None),
+    ],
+)
+def test_the_anchor_is_the_bare_dotted_address(path: list[str], expected: str | None) -> None:
+    assert build_anchor(path) == expected
+
+
+def test_the_anchor_and_the_label_are_the_same_address() -> None:
+    """The label is the anchor dressed for a reader. If these ever disagree about which clause
+    they name, a reference resolves to text the citation does not point at."""
+    path = ["Chương II", "Điều 12", "Khoản 2"]
+    assert build_citation_label(path).replace("Điều ", "") == build_anchor(path)
+
+
+def test_an_english_article_keeps_its_own_label() -> None:
+    """The corpus is bilingual: a citation has to read back in the language it was written
+    in, while the anchor it resolves through is language-free."""
+    path = ["Chapter II", "Article 12", "Khoản 2"]
+    assert build_citation_label(path) == "Article 12.2"
+    assert build_anchor(path) == "12.2"

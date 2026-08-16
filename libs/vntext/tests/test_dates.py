@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from kb_vntext.dates import detect, find_effective_from, find_issued_date
+from kb_vntext.dates import detect, find_effective_from, find_effective_to, find_issued_date
 
 NGHI_DINH = """
 CHÍNH PHỦ
@@ -69,3 +69,70 @@ def test_silence_stays_silence() -> None:
     detected = detect("Điều 1. Phạm vi điều chỉnh\nNghị định này quy định về ...")
     assert detected.effective_from is None
     assert detected.effective_evidence == ""
+
+
+# ------------------------------------------------------------- self-stated sunset (M9a)
+
+
+def test_a_sunset_stated_as_a_last_day_is_read_as_written() -> None:
+    text = "Thông tư này có hiệu lực thi hành đến hết ngày 31/12/2026."
+    expires, evidence = find_effective_to(text)
+    assert expires == date(2026, 12, 31)
+    assert "31/12/2026" in evidence
+
+
+def test_a_sunset_stated_as_a_ceasing_day_backs_off_one_day() -> None:
+    """The predicate is inclusive (`effective_to >= :effective_on`), so an instrument that
+    ceases *on* 01/01/2027 applied through 31/12/2026. One day either way is a day of a
+    withdrawn rule served, or a day of a live rule hidden."""
+    text = "Quyết định này hết hiệu lực kể từ ngày 01/01/2027."
+    expires, _evidence = find_effective_to(text)
+    assert expires == date(2026, 12, 31)
+
+
+def test_the_two_phrasings_agree_on_the_same_boundary() -> None:
+    """They are written differently and mean the same day. If these ever disagree, one of the
+    two branches has drifted."""
+    through, _ = find_effective_to("Thông tư này áp dụng đến hết ngày 31/12/2026.")
+    ceasing, _ = find_effective_to("Thông tư này hết hiệu lực kể từ ngày 01/01/2027.")
+    assert through == ceasing == date(2026, 12, 31)
+
+
+def test_a_clause_ending_another_instrument_is_not_this_documents_sunset() -> None:
+    """The sentence that abrogates a *different* decree sits in the same article and uses the
+    same words. Reading it here would expire the document that did the abrogating."""
+    expires, evidence = find_effective_to(NGHI_DINH)
+    assert expires is None
+    assert evidence == ""
+
+
+def test_a_named_instrument_in_the_subject_is_never_this_document() -> None:
+    text = "Nghị định số 42/2022/NĐ-CP hết hiệu lực kể từ ngày 01/5/2026 theo Nghị định này."
+    expires, _evidence = find_effective_to(text)
+    assert expires is None
+
+
+def test_an_instrument_that_only_starts_has_no_sunset() -> None:
+    """`có hiệu lực` alone must not be read as an end date — it is the opposite claim."""
+    expires, _evidence = find_effective_to("Thông tư này có hiệu lực thi hành từ ngày 01/01/2026.")
+    assert expires is None
+
+
+def test_both_dates_are_read_from_one_fee_schedule() -> None:
+    """The case ADR-0030 keeps on the version rather than in the ledger: a schedule that states
+    its own window on its face, known at publication."""
+    text = (
+        "Biểu phí này có hiệu lực thi hành kể từ ngày 01/01/2026 "
+        "và có hiệu lực đến hết ngày 31/12/2026."
+    )
+    detected = detect(text)
+    assert detected.effective_from == date(2026, 1, 1)
+    assert detected.effective_to == date(2026, 12, 31)
+    assert detected.expiry_evidence
+
+
+def test_most_documents_state_no_sunset_at_all() -> None:
+    detected = detect(NGHI_DINH)
+    assert detected.effective_from == date(2026, 5, 1)
+    assert detected.effective_to is None
+    assert detected.expiry_evidence == ""
