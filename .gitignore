@@ -55,3 +55,6 @@ Thumbs.db
 # Patch leftovers
 *.orig
 *.rej
+
+# TypeScript incremental build cache — a build artifact, not source.
+tsconfig.tsbuildinfo
