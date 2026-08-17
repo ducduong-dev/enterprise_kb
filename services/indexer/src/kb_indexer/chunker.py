@@ -97,6 +97,7 @@ def chunk_document(kbdoc: KBDoc, *, legal_number: str | None = None) -> list[Chu
     """Split a parsed document into chunks at clause/article granularity."""
     number = legal_number or kbdoc.doc_meta.legal_number
     groups = _group_by_section(kbdoc.blocks)
+    titles = _heading_titles(kbdoc.blocks)
 
     chunks: list[Chunk] = []
     ordinal = 0
@@ -108,11 +109,11 @@ def chunk_document(kbdoc: KBDoc, *, legal_number: str | None = None) -> list[Chu
         # one — that is the table's caption, and a table without it is unattributable.
         if group.is_table:
             if pending is not None and pending.is_heading_only:
-                ordinal = _emit(chunks, pending.merge(group), number, ordinal)
+                ordinal = _emit(chunks, pending.merge(group), number, ordinal, titles)
             else:
                 if pending is not None:
-                    ordinal = _emit(chunks, pending, number, ordinal)
-                ordinal = _emit(chunks, group, number, ordinal)
+                    ordinal = _emit(chunks, pending, number, ordinal, titles)
+                ordinal = _emit(chunks, group, number, ordinal, titles)
             pending = None
             continue
 
@@ -121,15 +122,15 @@ def chunk_document(kbdoc: KBDoc, *, legal_number: str | None = None) -> list[Chu
         elif pending.can_merge_with(group):
             pending = pending.merge(group)
         else:
-            ordinal = _emit(chunks, pending, number, ordinal)
+            ordinal = _emit(chunks, pending, number, ordinal, titles)
             pending = group
 
         if pending is not None and len(pending.text) >= TARGET_CHARS:
-            ordinal = _emit(chunks, pending, number, ordinal)
+            ordinal = _emit(chunks, pending, number, ordinal, titles)
             pending = None
 
     if pending is not None:
-        _emit(chunks, pending, number, ordinal)
+        _emit(chunks, pending, number, ordinal, titles)
 
     return chunks
 
@@ -227,7 +228,46 @@ def _group_by_section(blocks: list[Block]) -> list[_Group]:
     return [group for group in groups if group.text.strip()]
 
 
-def _emit(chunks: list[Chunk], group: _Group, legal_number: str | None, ordinal: int) -> int:
+def _heading_titles(blocks: list[Block]) -> dict[tuple[str, ...], str]:
+    """Each structural path mapped to the heading line the document actually printed.
+
+    `SectionTracker.path` carries labels — "Điều 6" — because a label is a stable join key and
+    a title is prose that a consolidation can reword. That is right for `section_path`, and it
+    is why `subject_key` computed from `section_path` alone was **always None**: a path of pure
+    structure says what a clause *is* and never what it is about, so the one field that exists
+    to say what a clause is about had nothing to read.
+
+    The title was never lost, only unused: a heading block keeps its whole line, and its own
+    `section_path` ends at itself. So the raw text is recoverable here, from data every stored
+    KBDoc already holds — which is what makes this fixable by a rechunk rather than by
+    re-running OCR over the corpus.
+    """
+    return {
+        tuple(block.section_path): block.text
+        for block in blocks
+        if block.type == "heading" and block.section_path
+    }
+
+
+def _titled_path(section_path: list[str], titles: dict[tuple[str, ...], str]) -> list[str]:
+    """The path with each level's printed heading in place of its bare label.
+
+    Falls back to the label where a document printed no title for that level, which is common
+    for `Khoản 2` and is exactly the case that should contribute nothing to a subject key.
+    """
+    return [
+        titles.get(tuple(section_path[: index + 1]), part)
+        for index, part in enumerate(section_path)
+    ]
+
+
+def _emit(
+    chunks: list[Chunk],
+    group: _Group,
+    legal_number: str | None,
+    ordinal: int,
+    titles: dict[tuple[str, ...], str] | None = None,
+) -> int:
     citation = build_citation_label(group.section_path, legal_number) or None
     heading = _heading_prefix(group.section_path)
     parts = [group.text] if group.is_table else _split(group.text)
@@ -244,7 +284,7 @@ def _emit(chunks: list[Chunk], group: _Group, legal_number: str | None, ordinal:
                 page=group.page,
                 article=article_number(group.section_path),
                 anchor=build_anchor(group.section_path),
-                subject_key=subject_key(group.section_path),
+                subject_key=subject_key(_titled_path(group.section_path, titles or {})),
                 block_ids=[block.id for block in group.blocks],
                 part=index,
                 part_count=len(parts),

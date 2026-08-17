@@ -27,7 +27,7 @@ from __future__ import annotations
 
 from kb_common.db import create_db_engine
 from kb_common.logging import configure_logging, get_logger
-from kb_indexer.chunker import article_number, split_section_path, subject_key
+from kb_indexer.chunker import article_number, split_section_path
 from kb_vntext.sections import build_anchor
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -67,15 +67,11 @@ def backfill(session: Session, *, batch: int = BATCH) -> tuple[int, int]:
             path = split_section_path(row.section_path)
             article = article_number(path)
             anchor = build_anchor(path)
-            subject = subject_key(path)
-            if article == row.article and anchor == row.anchor and subject == row.subject_key:
+            if article == row.article and anchor == row.anchor:
                 continue
             session.execute(
-                text(
-                    "UPDATE chunks SET article = :article, anchor = :anchor, "
-                    "subject_key = :subject WHERE id = :id"
-                ),
-                {"article": article, "anchor": anchor, "subject": subject, "id": row.id},
+                text("UPDATE chunks SET article = :article, anchor = :anchor WHERE id = :id"),
+                {"article": article, "anchor": anchor, "id": row.id},
             )
             changed += 1
         session.commit()

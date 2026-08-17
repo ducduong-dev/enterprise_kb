@@ -255,9 +255,14 @@ def test_the_subject_key_is_order_independent_and_folded() -> None:
 
 
 def test_the_backfill_derives_what_the_chunker_would_have_written() -> None:
-    """`scripts/backfill_chunk_article.py` fills these columns from the stored `section_path`
-    instead of rechunking the corpus. That is only safe if it produces the same answer, so the
-    claim is asserted rather than trusted."""
+    """`scripts/backfill_chunk_article.py` fills `article` and `anchor` from the stored
+    `section_path` instead of rechunking. That is only safe if it produces the same answer, so
+    the claim is asserted rather than trusted.
+
+    `subject_key` is deliberately *not* in that list, and the second half of this test is why:
+    it cannot be recovered from `section_path`, because a path carries structural labels and a
+    subject key needs the heading title. The backfill used to derive it anyway and wrote NULL
+    for every row in the corpus. Asserting the absence keeps anyone from adding it back."""
     doc = _doc(
         [
             ("Chương II. TỶ LỆ AN TOÀN VỐN", "heading"),
@@ -272,4 +277,9 @@ def test_the_backfill_derives_what_the_chunker_would_have_written() -> None:
         recovered = split_section_path(chunk.section_path_text)
         assert article_number(recovered) == chunk.article
         assert build_anchor(recovered) == chunk.anchor
-        assert subject_key(recovered) == chunk.subject_key
+
+    # And the one that needs a rechunk: the titles the key is built from were never in the path.
+    titled = [chunk for chunk in chunk_document(doc) if chunk.subject_key]
+    assert titled, "the fixture has titled headings, so some chunk must carry a subject key"
+    for chunk in titled:
+        assert subject_key(split_section_path(chunk.section_path_text)) is None
