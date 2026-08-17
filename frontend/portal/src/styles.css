@@ -109,6 +109,23 @@ button.secondary { background: var(--muted); }
 .merge-approval .actions { display: flex; gap: 0.75rem; margin-top: 0.75rem; }
 @media (max-width: 60rem) { .merge-panes { grid-template-columns: 1fr; } }
 
+/* Clause review (M9d). Two panes rather than three: the merge screen compares two versions of
+   one document against a draft, this compares two clauses against each other, and a 3-column
+   grid holding two panes reads as though a third is missing. */
+.clause-review .merge-panes { grid-template-columns: repeat(2, 1fr); }
+/* The change, first and largest — a steward's queue is workable when it leads with
+   "11.000 đồng → 15.000 đồng" and not when it leads with a similarity score. */
+.clause-delta { margin-top: 1rem; border-left: 3px solid var(--accent); padding: 0.2rem 0 0.2rem 0.8rem; }
+.clause-delta h2 { font-size: 0.85rem; color: var(--muted); margin: 0 0 0.3rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.clause-delta ul { margin: 0; padding-left: 1.1rem; }
+.clause-delta li { font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+.clause-evidence { margin-top: 1.2rem; }
+.clause-evidence h2 { font-size: 0.85rem; color: var(--muted); margin: 0 0 0.3rem; text-transform: uppercase; letter-spacing: 0.04em; }
+/* A proposal must never look decided. */
+.tag.state-proposed { background: #fff3bf; color: #7a5b00; }
+.tag.state-confirmed { background: #e6fcf5; color: #0b7285; }
+.tag.state-revoked { background: #f1f3f5; color: var(--muted); text-decoration: line-through; }
+
 /* Chat (M6). The answer is the small part; the evidence under it is the point. */
 .chat__log { display: grid; gap: 1.5rem; margin: 1.5rem 0; }
 .chat__exchange { border-bottom: 1px solid var(--line); padding-bottom: 1rem; }

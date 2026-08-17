@@ -15,7 +15,22 @@ const TASK_LABEL: Record<string, string> = {
   merge_review: "Duyệt hợp nhất",
   impact_review: "Đánh giá tác động",
   pii_override: "Phê duyệt ngoại lệ dữ liệu cá nhân",
+  expiry_review: "Cảnh báo hết hiệu lực",
+  periodic_review: "Rà soát định kỳ",
+  clause_review: "Duyệt thay thế điều khoản",
 };
+
+/** Which screen a task opens. A consolidation needs the three-pane merge view and a clause
+ *  supersession needs the two-pane comparison; everything else is the block editor. */
+const TASK_ROUTE: Record<string, string> = {
+  merge_review: "merge",
+  clause_review: "clause",
+};
+
+function clauseDelta(payload: Record<string, unknown>): string[] {
+  const delta = payload.quantity_delta as { changed?: unknown } | undefined;
+  return Array.isArray(delta?.changed) ? (delta.changed as string[]) : [];
+}
 
 export function ReviewQueue() {
   const [tasks, setTasks] = useState<ReviewTask[]>([]);
@@ -36,14 +51,7 @@ export function ReviewQueue() {
       <ul className="tasks">
         {tasks.map((task) => (
           <li key={task.id}>
-            {/* A consolidation opens the three-pane merge screen, not the block editor. */}
-            <Link
-              to={
-                task.task_type === "merge_review"
-                  ? `/merge/${task.id}`
-                  : `/review/${task.id}`
-              }
-            >
+            <Link to={`/${TASK_ROUTE[task.task_type] ?? "review"}/${task.id}`}>
               <strong>{TASK_LABEL[task.task_type] ?? task.task_type}</strong>
             </Link>
             <span className="hint"> · {task.assignee_group ?? "chưa phân công"}</span>
@@ -60,6 +68,16 @@ export function ReviewQueue() {
                 {task.payload.draft_complete === false && (
                   <span className="warn"> · dự thảo chưa hoàn chỉnh</span>
                 )}
+              </div>
+            )}
+            {task.task_type === "clause_review" && (
+              <div className="hint">
+                {/* The delta is what tells a steward whether this is worth opening. The funnel
+                    writes it as `{changed: [...]}`, the same shape it stores on the row. */}
+                {clauseDelta(task.payload).join(" · ")}
+                {typeof task.payload.rationale === "string" &&
+                  task.payload.rationale &&
+                  ` — ${task.payload.rationale}`}
               </div>
             )}
             {task.payload.requires_ocr === true && (

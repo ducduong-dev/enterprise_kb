@@ -50,6 +50,8 @@ QUERY = "biểu phí chuyển tiền trong nước qua kênh quầy"
 
 OLD_CLAUSE = "Điều 5"
 NEW_CLAUSE = "Điều 7"
+#: Shared by both clauses, so gate 1's lexical channel pairs them when the funnel runs.
+SUBJECT = "bieu phi chuyen tien trong nuoc"
 
 
 @pytest.fixture
@@ -64,6 +66,7 @@ def schedules(pristine_corpus: Engine, session: Session) -> tuple[ClauseRef, Cla
         effective_from=date(2023, 1, 1),
         section_path=OLD_CLAUSE,
         body=OLD_RATE,
+        subject_key=SUBJECT,
     )
 
     new_doc = make_document(session, title="Biểu phí dịch vụ 2026", legal_number="09/2026/QĐ-NHNN")
@@ -75,6 +78,7 @@ def schedules(pristine_corpus: Engine, session: Session) -> tuple[ClauseRef, Cla
         effective_from=TOOK_EFFECT,
         section_path=NEW_CLAUSE,
         body=NEW_RATE,
+        subject_key=SUBJECT,
     )
     session.flush()
     return ClauseRef(old_doc, OLD_CLAUSE), ClauseRef(new_doc, NEW_CLAUSE)
@@ -383,3 +387,59 @@ def test_the_engines_query_agrees_with_the_registrys(
             row = registry_view[key]
             assert replacement == (row.new_document_id, row.new_section_path)
             assert supersedes_from == row.supersedes_from
+
+
+# ------------------------------------------------------------ funnel → queue → screen
+
+
+def test_the_review_screen_reads_what_the_funnel_wrote(
+    session: Session, schedules: tuple[ClauseRef, ClauseRef]
+) -> None:
+    """The payload contract, asserted across the two services that share it.
+
+    `ClauseFunnel` builds the `clause_review` task's payload in registry; `ClauseReviewService`
+    reads it in portal-api. Nothing else checks that the two agree — the funnel's own tests
+    assert what it writes and the screen's assert what it reads, and both would keep passing if
+    a key were renamed on one side. This is the test that fails.
+    """
+    import json
+
+    from kb_portal_api.clauses import ClauseReviewService
+    from kb_ports.adapters.generation import ScriptedGeneration
+    from kb_registry.adjudicate import ClauseAdjudicator
+    from kb_registry.funnel import ClauseFunnel
+    from kb_schemas.enums import ReviewTaskType
+
+    _, new = schedules
+    scripted = ScriptedGeneration(
+        responses=[
+            json.dumps(
+                {
+                    "verdict": "superseded",
+                    "replacement_idx": 0,
+                    "confidence": 0.9,
+                    "rationale": "mức phí đã thay đổi",
+                }
+            )
+        ]
+    )
+    report = ClauseFunnel(session, ClauseAdjudicator(scripted)).run(new.document_id)
+    assert report.proposals == 1, "fixture did not produce a proposal to review"
+    session.flush()
+
+    task_id = session.execute(
+        text("SELECT id, assignee_group FROM review_tasks WHERE task_type = :t"),
+        {"t": ReviewTaskType.CLAUSE_REVIEW.value},
+    ).one()
+
+    screen = ClauseReviewService(session).screen(
+        task_id[0], reviewer_groups={task_id[1]} if task_id[1] else set()
+    )
+
+    # Every field the screen leads with has to have survived the hand-off.
+    assert screen["old"]["text"] == OLD_RATE
+    assert screen["new"]["text"] == NEW_RATE
+    assert screen["quantity_delta"] == ["11000 đồng → 15000 đồng"]
+    assert screen["state"] == "proposed"
+    assert screen["supersedes_from"] == TOOK_EFFECT.isoformat()
+    assert screen["settled_by_label"], "settled_by did not survive as something readable"

@@ -23,6 +23,7 @@ import { DocumentDetail } from "./pages/DocumentDetail";
 import { ReviewQueue } from "./pages/ReviewQueue";
 import { ReviewEditor } from "./pages/ReviewEditor";
 import { MergeEditor } from "./pages/MergeEditor";
+import { ClauseReview } from "./pages/ClauseReview";
 import { Chat } from "./pages/Chat";
 import { Search } from "./pages/Search";
 import { Upload } from "./pages/Upload";
@@ -46,6 +47,13 @@ function MergeEditorRoute() {
   const navigate = useNavigate();
   if (!taskId) return <p className="page">Không tìm thấy việc hợp nhất.</p>;
   return <MergeEditor taskId={taskId} onDone={() => navigate("/review")} />;
+}
+
+function ClauseReviewRoute() {
+  const { taskId } = useParams();
+  const navigate = useNavigate();
+  if (!taskId) return <p className="page">Không tìm thấy đề xuất thay thế.</p>;
+  return <ClauseReview taskId={taskId} onDone={() => navigate("/review")} />;
 }
 
 function DocumentDetailRoute() {
@@ -149,6 +157,7 @@ export function App() {
             element={<ReviewEditorRoute categories={categories} />}
           />
           <Route path="/merge/:taskId" element={<MergeEditorRoute />} />
+          <Route path="/clause/:taskId" element={<ClauseReviewRoute />} />
           <Route path="/callback" element={<Callback />} />
         </Routes>
       </main>

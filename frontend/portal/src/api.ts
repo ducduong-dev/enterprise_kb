@@ -274,6 +274,53 @@ export interface MergeScreen {
   };
 }
 
+/** One pane of the clause-review screen. `missing` when a rechunk retired the section path
+ *  the proposal was anchored on — reported rather than rendered blank, because an empty pane
+ *  reads as "this clause says nothing" and a reviewer could confirm that. */
+export interface ClausePane {
+  document_id: string;
+  section_path: string;
+  missing: boolean;
+  text?: string;
+  citation_label?: string | null;
+  document_title?: string | null;
+  legal_number?: string | null;
+  doc_class?: string;
+  effective_from?: string | null;
+  effective_to?: string | null;
+}
+
+export interface ClauseScreen {
+  task_id: string;
+  supersession_id: string;
+  /** The ledger's state, not the task's: `proposed`, `confirmed` or `revoked`. */
+  state: string;
+  decided: boolean;
+  assignee_group: string | null;
+  old: ClausePane;
+  new: ClausePane | null;
+  supersedes_from: string;
+  basis: string;
+  verdict: string | null;
+  settled_by: string | null;
+  settled_by_label: string;
+  /** Already computed old→new, e.g. `["8%/năm → 10%/năm"]`. */
+  quantity_delta: string[];
+  scope_facets: Record<string, Record<string, string[]>>;
+  rationale: string;
+  model: string | null;
+  prompt_version: string | null;
+  detected_by: string;
+  score: number | null;
+}
+
+export interface ClauseDecisionResult {
+  task_id: string;
+  decision: string;
+  state: string;
+  detail: string;
+}
+
 export interface MergeDecisionResult {
   task_id: string;
   decision: string;
@@ -369,6 +416,24 @@ export function submitMergeDecision(
 ): Promise<MergeDecisionResult> {
   return request<MergeDecisionResult>(
     `/v1/merge-tasks/${encodeURIComponent(taskId)}/decision`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    },
+  );
+}
+
+export function getClauseScreen(taskId: string): Promise<ClauseScreen> {
+  return request<ClauseScreen>(`/v1/clause-tasks/${encodeURIComponent(taskId)}`);
+}
+
+export function submitClauseDecision(
+  taskId: string,
+  body: { decision: "confirm" | "reject"; note: string },
+): Promise<ClauseDecisionResult> {
+  return request<ClauseDecisionResult>(
+    `/v1/clause-tasks/${encodeURIComponent(taskId)}/decision`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

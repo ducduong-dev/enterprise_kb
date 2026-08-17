@@ -38,6 +38,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from kb_portal_api.auth import current_principal, require_role
+from kb_portal_api.clauses import ClauseDecision, ClauseReviewService
 from kb_portal_api.inspect import InspectService
 from kb_portal_api.merge import MergeDecision, MergeService
 from kb_portal_api.rates import RateScheduleIn, RateScheduleOut, RateScheduleService
@@ -100,6 +101,11 @@ def merge_service(
     store: StoragePort = Depends(storage),
 ) -> MergeService:
     return MergeService(session, storage=store, audit=SqlAuditSink(session))
+
+
+def clause_review_service(session: Session = Depends(get_session)) -> ClauseReviewService:
+    """No storage and no embedder: this screen compares two chunks already in the registry."""
+    return ClauseReviewService(session, audit=SqlAuditSink(session))
 
 
 def inspect_service(
@@ -501,6 +507,59 @@ class MergeDecisionOut(BaseModel):
     #: says so rather than showing a merge that looks approved and never publishes.
     signalled: bool
     detail: str
+
+
+class ClauseDecisionIn(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    decision: str
+    #: Mandatory on a rejection and enforced server-side. "Why was this not a supersession" is
+    #: the only signal the detector's false-positive rate can be measured from (ADR-0033).
+    note: str = ""
+
+
+class ClauseDecisionOut(BaseModel):
+    task_id: uuid.UUID
+    decision: str
+    #: The ledger's state afterwards — `confirmed` or `revoked`, never the task's.
+    state: str
+    detail: str
+
+
+@app.get("/v1/clause-tasks/{task_id}")
+def get_clause_screen(
+    task_id: uuid.UUID,
+    principal: Principal = Depends(current_principal),
+    clauses: ClauseReviewService = Depends(clause_review_service),
+) -> dict[str, Any]:
+    """Two clauses side by side, with the quantity delta and what the funnel concluded."""
+    return clauses.screen(task_id, reviewer_groups=reviewer_groups(principal))
+
+
+@app.post("/v1/clause-tasks/{task_id}/decision", response_model=ClauseDecisionOut)
+def submit_clause_decision(
+    task_id: uuid.UUID,
+    body: ClauseDecisionIn,
+    principal: Principal = Depends(current_principal),
+    clauses: ClauseReviewService = Depends(clause_review_service),
+) -> ClauseDecisionOut:
+    """Confirm the supersession, or reject it.
+
+    No workflow signal, unlike the merge decision: confirming does not publish anything. It
+    flags a clause and points at its replacement, and the retrieval funnel reads the ledger
+    directly on the next query (ADR-0033/0040).
+    """
+    outcome = clauses.decide(
+        task_id,
+        ClauseDecision(decision=body.decision, actor=principal.audit_actor, note=body.note),
+        reviewer_groups=reviewer_groups(principal),
+    )
+    return ClauseDecisionOut(
+        task_id=outcome.task_id,
+        decision=outcome.decision,
+        state=outcome.state,
+        detail=outcome.detail,
+    )
 
 
 @app.get("/v1/merge-tasks/{task_id}")
