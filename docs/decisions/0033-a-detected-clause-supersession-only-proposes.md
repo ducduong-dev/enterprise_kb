@@ -1,8 +1,8 @@
 # ADR-0033 — A detected clause supersession only proposes
 
-**Status:** proposed · **Date:** 2026-08-13 · **Amended:** 2026-08-17 five times — by a second
-reading of graphiti-core at source, and by building gate 5, the funnel, the retrieval side and
-the answer. All five are recorded in sections at the end rather than folded into the text above.
+**Status:** proposed · **Date:** 2026-08-13 · **Amended:** 2026-08-17 six times — by a second
+reading of graphiti-core at source, and by building gate 5, the funnel, the retrieval side, the
+answer and the metrics. All six are recorded in sections at the end rather than folded above.
 
 ## Context
 
@@ -405,3 +405,36 @@ one whose replacement is absent from it. Both prompts therefore forbid assigning
 marker, and a test pins every bracketed label `render()` can emit to a rule in both prompt files
 — because deleting a rule breaks nothing visible: the marker still appears, the model quietly
 stops acting on it, and a stale rate is served with no warning by a build that is entirely green.
+
+## Corrections from building the metrics
+
+**The four numbers are a report, not a gate — and that is the finding, not a shortcut.** The
+Consequences section says quality "is measured by two numbers in `eval/`", which reads like the
+retrieval harness, where recall below 0.85 blocks a merge. It cannot be that yet. A threshold
+for stale-answer rate or false-supersession rate has to come from a corpus with real confirmed
+supersessions and real traffic, and setting one now would be inventing the finding rather than
+measuring it. What is gated instead is the report's *honesty*.
+
+That turned out to be the substance of the work. Every one of the four is a ratio counting a bad
+thing, and on this corpus every one can be 0/0 — so a `Measurement` carries its numerator, its
+denominator and what the denominator counts, and `rate` returns `None` rather than `0.0` when
+there was nothing to divide. A spurious zero here would read as a clean bill of health for a
+measurement that never ran, on precisely the corpus where nothing has been measured. Two further
+places needed the same care:
+
+* a stale-answer rate of 0% over 44 answers is a real measurement and a vacuous one when the
+  corpus holds no confirmed supersessions, so the report says which it is;
+* a gate/model split of 100% model looks like a gate regression when it is a corpus that states
+  no scope facets for gate 3 to bite on, so the report says that too.
+
+Three definitional choices are worth not re-deriving. **Refusals are outside the stale-answer
+denominator**, because leaving them in would let the rate fall by refusing more — the wrong
+incentive to build into the number that decides whether this milestone worked. **Undecided
+proposals are outside the false-supersession denominator**, because counting `proposed` as "not
+yet wrong" would make precision improve every time the backfill ran. And **the declared share
+counts confirmed rows only**, because counting the funnel's unreviewed output would let the
+inferred share rise by running the backfill again — measuring our own activity rather than the
+corpus's drafting habits.
+
+As of 2026-08-17 the report runs and three of the four say *not measured*. That is the honest
+state of M9d: the code is complete and the corpus cannot yet grade it.

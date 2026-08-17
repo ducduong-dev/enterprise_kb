@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import date
+from typing import Any
 
 import pytest
 from kb_ports.adapters.generation import ScriptedGeneration
@@ -109,7 +110,7 @@ def verdict_rows(session: Session) -> list[dict[str, object]]:
     ]
 
 
-def tasks(session: Session) -> list[dict[str, object]]:
+def tasks(session: Session) -> list[dict[str, Any]]:
     return [
         dict(row)
         for row in session.execute(

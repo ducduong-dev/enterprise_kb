@@ -194,6 +194,10 @@ index: ## Drain the outbox into the keyword index once
 chat-eval: ## Answer faithfulness + chat red team (needs `make seed`)
 	$(UV) run python eval/harness/answers.py
 
+.PHONY: supersession-eval
+supersession-eval: ## M9d's four numbers: stale answers, false supersessions, gate/model split, declared share
+	$(ENVRC) $(UV) run python eval/harness/supersession.py
+
 .PHONY: external-redteam
 external-redteam: ## The public bot under pressure: disclosure and conduct (M8)
 	$(UV) run python eval/harness/external.py

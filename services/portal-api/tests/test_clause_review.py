@@ -32,6 +32,9 @@ from sqlalchemy.orm import Session
 
 pytestmark = pytest.mark.integration
 
+#: What the `proposal` fixture hands each test: the task, the ledger row, and both documents.
+Proposal = dict[str, uuid.UUID]
+
 CATEGORY = "t_clause_review"
 STEWARD_GROUP = "dept/ops"
 OTHER_GROUP = "dept/legal"
@@ -81,7 +84,7 @@ def client(session: Session) -> Iterator[TestClient]:
 
 
 @pytest.fixture
-def proposal(session: Session) -> dict[str, uuid.UUID]:
+def proposal(session: Session) -> Proposal:
     """What a funnel run leaves behind: a proposed row and a task pointing at it."""
     session.merge(CategoryRow(path=CATEGORY, label="Clause review", steward_group=STEWARD_GROUP))
     session.flush()
@@ -140,11 +143,15 @@ def proposal(session: Session) -> dict[str, uuid.UUID]:
 
 
 def screen(
-    client: TestClient, task_id: uuid.UUID, *, user: str = "u-steward-one", **kw
+    client: TestClient,
+    task_id: uuid.UUID,
+    *,
+    user: str = "u-steward-one",
+    groups: list[str] | None = None,
 ) -> Response:
     response: Response = client.get(
         f"/v1/clause-tasks/{task_id}",
-        headers={"Authorization": f"Bearer {make_token(user, **kw)}"},
+        headers={"Authorization": f"Bearer {make_token(user, groups)}"},
     )
     return response
 
@@ -168,7 +175,7 @@ def decide(
 # ------------------------------------------------------------------------------- the screen
 
 
-def test_the_screen_shows_both_clauses_whole(client: TestClient, proposal: dict) -> None:
+def test_the_screen_shows_both_clauses_whole(client: TestClient, proposal: Proposal) -> None:
     """A truncated pane is a reviewer approving text they did not read."""
     body = screen(client, proposal["task"]).json()
 
@@ -180,7 +187,7 @@ def test_the_screen_shows_both_clauses_whole(client: TestClient, proposal: dict)
 
 
 def test_the_screen_leads_with_the_change_rather_than_a_score(
-    client: TestClient, proposal: dict
+    client: TestClient, proposal: Proposal
 ) -> None:
     """ "11000 đồng → 15000 đồng" is what makes the queue workable; a similarity number is what
     makes a reviewer defer to the machine."""
@@ -194,7 +201,7 @@ def test_the_screen_leads_with_the_change_rather_than_a_score(
 
 
 def test_a_task_belonging_to_another_group_is_missing_not_forbidden(
-    client: TestClient, proposal: dict
+    client: TestClient, proposal: Proposal
 ) -> None:
     """Whether the bank is reviewing a supersession is itself something an outsider has no
     business learning — the same reasoning the merge screen gives."""
@@ -203,7 +210,7 @@ def test_a_task_belonging_to_another_group_is_missing_not_forbidden(
 
 
 def test_a_rechunked_away_clause_is_reported_rather_than_blank(
-    client: TestClient, session: Session, proposal: dict
+    client: TestClient, session: Session, proposal: Proposal
 ) -> None:
     """A pane that silently rendered empty would read as "this clause says nothing", which a
     reviewer could plausibly confirm."""
@@ -225,7 +232,7 @@ def test_a_rechunked_away_clause_is_reported_rather_than_blank(
 
 
 def test_confirming_flags_the_clause_and_closes_the_task(
-    client: TestClient, session: Session, proposal: dict
+    client: TestClient, session: Session, proposal: Proposal
 ) -> None:
     response = decide(client, proposal["task"], "confirm")
 
@@ -239,13 +246,13 @@ def test_confirming_flags_the_clause_and_closes_the_task(
     assert task.decided_by == "u-steward-one"
 
 
-def test_rejecting_needs_a_reason(client: TestClient, proposal: dict) -> None:
+def test_rejecting_needs_a_reason(client: TestClient, proposal: Proposal) -> None:
     """The only signal the detector's false-positive rate can be measured from."""
     assert decide(client, proposal["task"], "reject").status_code == 422
 
 
 def test_rejecting_records_the_reason_and_serves_the_clause_unflagged(
-    client: TestClient, session: Session, proposal: dict
+    client: TestClient, session: Session, proposal: Proposal
 ) -> None:
     """A rejected proposal is a finding about the detector. Deleting it would lose the only
     record that the pair was ever considered."""
@@ -261,16 +268,16 @@ def test_rejecting_records_the_reason_and_serves_the_clause_unflagged(
     assert any("kênh khác nhau" in (row.evidence or "") for row in history)
 
 
-def test_a_decided_task_cannot_be_decided_twice(client: TestClient, proposal: dict) -> None:
+def test_a_decided_task_cannot_be_decided_twice(client: TestClient, proposal: Proposal) -> None:
     assert decide(client, proposal["task"], "confirm").status_code == 200
     assert decide(client, proposal["task"], "confirm").status_code == 422
 
 
-def test_an_unknown_decision_is_refused(client: TestClient, proposal: dict) -> None:
+def test_an_unknown_decision_is_refused(client: TestClient, proposal: Proposal) -> None:
     assert decide(client, proposal["task"], "maybe").status_code == 422
 
 
-def test_another_groups_reviewer_cannot_decide(client: TestClient, proposal: dict) -> None:
+def test_another_groups_reviewer_cannot_decide(client: TestClient, proposal: Proposal) -> None:
     response = client.post(
         f"/v1/clause-tasks/{proposal['task']}/decision",
         json={"decision": "confirm", "note": ""},

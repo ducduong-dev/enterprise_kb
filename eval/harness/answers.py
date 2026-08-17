@@ -62,6 +62,10 @@ class AnswerResult:
     unsupported: list[int] = field(default_factory=list)
     uncited_claims: int = 0
     answer: str = ""
+    #: Citations whose clause a confirmed newer one replaces (M9d). Not a faithfulness
+    #: failure — the answer is grounded in text the corpus really contains, and the pipeline
+    #: labelled it — so it is counted rather than scored, by `supersession.py`.
+    superseded_citations: list[str] = field(default_factory=list)
 
     @property
     def measured(self) -> bool:
@@ -269,6 +273,11 @@ def run_answer(
         unsupported=[],  # filled by the trace below
         uncited_claims=0 if response.refused else _claims_without_citation(response.answer),
         answer=response.answer,
+        superseded_citations=[
+            keys.get(str(c.document_id), str(c.document_id))
+            for c in response.citations
+            if c.superseded_by is not None
+        ],
     )
 
 
