@@ -323,24 +323,70 @@ def article_number(section_path: list[str]) -> int | None:
     return None
 
 
+def _title_tokens(part: str) -> str:
+    """One heading's subject words, folded, deduplicated and sorted into a comparable key.
+
+    Diacritics folded because the same subject is typed both ways across a corpus this size,
+    and tokens sorted so word order cannot split one subject into two keys.
+    """
+    tokens = {
+        token
+        for token in _WORD.findall(fold_diacritics(part).lower())
+        if len(token) > 1 and token not in _SUBJECT_STOPWORDS and not token.isdigit()
+    }
+    return " ".join(sorted(tokens))
+
+
+#: Headings every Vietnamese instrument carries. Their *words* are ordinary — "hiệu" is in
+#: "hiệu quả" and "thi" in "thi công" — so these cannot be stopworded token by token without
+#: losing real subjects. They are boilerplate as whole headings, which is the granularity at
+#: which they are recognisable, so that is where they are matched.
+_BOILERPLATE_TITLES = (
+    "Hiệu lực thi hành",
+    "Điều khoản thi hành",
+    "Điều khoản chuyển tiếp",
+    "Tổ chức thực hiện",
+    "Trách nhiệm thi hành",
+    "Phạm vi điều chỉnh",
+    "Đối tượng áp dụng",
+    "Giải thích từ ngữ",
+    "Quy định chung",
+    "Nguyên tắc chung",
+)
+#: Computed with the same tokenizer the keys are, so the list above stays readable prose and
+#: cannot drift from what it is compared against.
+_BOILERPLATE_KEYS = frozenset(_title_tokens(title) for title in _BOILERPLATE_TITLES) - {""}
+
+
 def subject_key(section_path: list[str]) -> str | None:
     """What this clause is *about*, normalized so two documents can be compared on it.
 
-    The heading chain with the structural labels and instrument boilerplate stripped: `Chương
-    II > Điều 6. Tỷ lệ an toàn vốn > Khoản 2` becomes `an toan von ty le`. Diacritics folded
-    because the same subject is typed both ways across a corpus this size, and tokens sorted
-    so word order cannot split one subject into two keys.
+    **The deepest titled heading, not the chain.** `Chương II. Tỷ lệ an toàn vốn > Điều 6. Tỷ lệ
+    an toàn vốn tối thiểu > Khoản 1` keys on Điều 6's title alone. Unioning the whole chain was
+    the original reading of "the heading chain with boilerplate stripped" and it defeated the
+    only thing this key is for: an ancestor heading pollutes it, so the regulator's `Chương II.
+    Tỷ lệ an toàn vốn > Điều 6. …` and a bank policy's `Phần 2. Quản lý vốn > Mục 3. …` state one
+    rule under the same title and produced different keys. The channel then fired only between
+    documents of the same structural shape — two versions of one instrument, the case that
+    least needs it (ADR-0037, *Corrections*).
+
+    Ancestors are context, and context is what makes a key too specific to join on.
+
+    **A boilerplate heading yields None, and does not fall back to its parent.** Every
+    instrument has a "Hiệu lực thi hành"; keying on it linked the closing article of one
+    document to the closing article of every other. Falling back to the ancestor would be
+    worse than nothing — it would file the effectivity article of a capital circular under
+    capital adequacy, which is a confident wrong answer rather than an absent one.
 
     Returns None when nothing survives — a path of pure structure ("Điều 6") says what the
     clause *is* but not what it is about, and a key that says nothing would match everything.
     """
-    tokens = {
-        token
-        for part in section_path
-        for token in _WORD.findall(fold_diacritics(part).lower())
-        if len(token) > 1 and token not in _SUBJECT_STOPWORDS and not token.isdigit()
-    }
-    return " ".join(sorted(tokens)) or None
+    for part in reversed(section_path):
+        key = _title_tokens(part)
+        if not key:
+            continue
+        return None if key in _BOILERPLATE_KEYS else key
+    return None
 
 
 def _heading_prefix(section_path: list[str]) -> str:

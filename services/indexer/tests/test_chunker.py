@@ -249,6 +249,56 @@ def test_a_purely_structural_path_has_no_subject() -> None:
     assert subject_key(["Chương I", "Điều 1"]) is None
 
 
+def test_two_documents_structured_differently_share_one_subject_key() -> None:
+    """The only thing this key is for, and what unioning the whole chain defeated.
+
+    A regulator files the rule under a chapter about capital; a bank files its restatement
+    under a part about capital *management*. Same rule, same article title, and under the old
+    whole-chain union the ancestor "Quản lý vốn" put them in different fact sets — so the
+    channel fired only between documents of the same structural shape, which is the case that
+    least needs it (ADR-0037).
+    """
+    regulator = subject_key(
+        ["Chương II. Tỷ lệ an toàn vốn", "Điều 6. Tỷ lệ an toàn vốn tối thiểu", "Khoản 1"]
+    )
+    bank = subject_key(["Phần 2. Quản lý vốn", "Mục 3. Tỷ lệ an toàn vốn tối thiểu"])
+
+    assert regulator is not None
+    assert regulator == bank
+
+
+def test_an_untitled_leaf_falls_through_to_the_heading_that_has_a_title() -> None:
+    """ "Khoản 1" says what the clause is and never what it is about, so the article above it
+    is the deepest thing that answers the question."""
+    assert subject_key(["Điều 6. Tỷ lệ an toàn vốn", "Khoản 1"]) == subject_key(
+        ["Điều 6. Tỷ lệ an toàn vốn"]
+    )
+
+
+def test_a_boilerplate_heading_has_no_subject() -> None:
+    """Every instrument carries one. Keying on it linked the closing article of each document
+    to the closing article of every other — 28 chunks across two documents in this corpus."""
+    for title in (
+        "Điều 8. Hiệu lực thi hành",
+        "Điều 2. Đối tượng áp dụng",
+        "Điều 3. Giải thích từ ngữ",
+    ):
+        assert subject_key([title]) is None, title
+
+
+def test_boilerplate_does_not_fall_back_to_its_parent() -> None:
+    """Worse than nothing: it would file a capital circular's effectivity article under capital
+    adequacy, which is a confident wrong answer rather than an absent one."""
+    assert subject_key(["Chương II. Tỷ lệ an toàn vốn", "Điều 15. Hiệu lực thi hành"]) is None
+
+
+def test_boilerplate_words_still_count_inside_a_real_subject() -> None:
+    """ "hiệu" is in "hiệu quả" and "thi" in "thi công". These are boilerplate as whole
+    headings, which is why they are matched there and not stopworded token by token."""
+    assert subject_key(["Điều 9. Hiệu quả sử dụng vốn"]) is not None
+    assert subject_key(["Điều 4. Giám sát thi công công trình"]) is not None
+
+
 def test_the_subject_key_is_order_independent_and_folded() -> None:
     assert subject_key(["Tỷ lệ an toàn vốn"]) == subject_key(["Vốn an toàn tỷ lệ"])
     assert subject_key(["Dự trữ bắt buộc"]) == subject_key(["Du tru bat buoc"])

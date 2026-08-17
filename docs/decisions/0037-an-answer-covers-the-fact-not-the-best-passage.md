@@ -123,12 +123,30 @@ practice, two versions of one instrument — which is the case that least needs 
 cross-instrument case this ADR was written for falls to channels 1 and 3. In the seeded corpus
 the capital fact is covered by **reference**, not by subject, and coverage still reaches 1.00.
 
-This is recorded rather than fixed because the fix is a change to a field two milestones share:
-keying on the *leaf* title alone would make the channel work as described here and would also
-change ADR-0033 gate 1's candidate set, which is a detector decision with its own false-positive
-budget. It wants measuring before it is changed, and the measurement now exists — the eval
-reports coverage per entry and the funnel reports its gate/model split, so the claim "the leaf
-is the subject and the ancestors are context" can be tested rather than asserted.
+**Both were fixed on 2026-08-17, and measured rather than asserted.** `subject_key` now keys on
+the **deepest titled heading** instead of the union of the chain: ancestors are context, and
+context is exactly what makes a key too specific to join on. A **boilerplate heading yields
+None and does not fall back to its parent** — falling back would file a capital circular's
+effectivity article under capital adequacy, a confident wrong answer rather than an absent one.
+Boilerplate is matched as a whole heading and not token by token, because "hiệu" is in "hiệu
+quả" and "thi" in "thi công": the words are ordinary and only the heading is boilerplate.
+
+Measured over the corpus before and after, which is what the earlier caution was waiting for:
+
+| | before | after |
+|---|---:|---:|
+| live chunks with a key | 435 | 399 |
+| keys spanning >1 document | 2 (one boilerplate) | 1, the real one |
+| the capital fact set | 4 documents | 5 documents |
+| `hieu thi` ("Hiệu lực thi hành") | 28 chunks, 2 documents | gone |
+| funnel: pairs / settled by gates | 42 / 2 | 41 / 2 |
+| eval: recall@10 / fact coverage | 1.000 / 1.000 | 1.000 / 1.000 |
+
+The 36 chunks that lost a key are the ones whose only subject was boilerplate, which is the
+fix working. Gate 1's candidate set barely moved — the worry that motivated the caution — while
+the cross-instrument match this ADR was written for now happens: the regulator's `Chương II. Tỷ
+lệ an toàn vốn > Điều 6. …` and the bank policy's `Phần 2. Quản lý vốn > Mục 3. …` finally share
+a key.
 
 **Fact coverage is `None` where a fact is unlabelled, never 1.0.** `recall_at_k` scores an empty
 expectation 1.0 and is right to — "the correct answer is nothing" is a real ACL expectation.
