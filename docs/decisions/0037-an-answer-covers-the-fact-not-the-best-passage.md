@@ -101,3 +101,38 @@ promotes it above a closer paraphrase of the question.
   of this ADR, and it is work on the eval set rather than on the code.
 * `eval/` gains **fact coverage** — of the documents that state the answer's rule, the share
   present in the context — reported beside recall@k, which it does not replace.
+
+## Corrections from building it (M10, 2026-08-17)
+
+**Channel 2 could not fire at all, and the reason was upstream.** `chunks.subject_key` was NULL
+for every chunk in the corpus — not a backfill that had not run, a derivation that could never
+work: it was computed from `section_path`, which carries structural *labels* ("Điều 6") because
+a label is a stable join key, while a subject key needs the heading's *title* ("Tỷ lệ an toàn
+vốn"). Fixed in the chunker (`ad8b695`); ADR-0033's gate 1 was running on one channel for the
+same reason, which is what "by_gate: 0" in the M9d backfill was really saying.
+
+**Exact equality on the whole heading chain is narrower than this ADR implies, and the fixture
+corpus shows it.** `subject_key` unions the tokens of *every* level of the path, so an ancestor
+heading pollutes the key: the regulator's `Chương II. Tỷ lệ an toàn vốn > Điều 6. Tỷ lệ an toàn
+vốn tối thiểu` and the internal policy's `Phần 2. Quản lý vốn > Mục 3. Tỷ lệ an toàn vốn tối
+thiểu` state the same rule under the same leaf title and produce different keys, because
+"Quản lý vốn" is in one chain and not the other.
+
+The consequence is that channel 2 fires between documents of the same structural shape — in
+practice, two versions of one instrument — which is the case that least needs a fact set. The
+cross-instrument case this ADR was written for falls to channels 1 and 3. In the seeded corpus
+the capital fact is covered by **reference**, not by subject, and coverage still reaches 1.00.
+
+This is recorded rather than fixed because the fix is a change to a field two milestones share:
+keying on the *leaf* title alone would make the channel work as described here and would also
+change ADR-0033 gate 1's candidate set, which is a detector decision with its own false-positive
+budget. It wants measuring before it is changed, and the measurement now exists — the eval
+reports coverage per entry and the funnel reports its gate/model split, so the claim "the leaf
+is the subject and the ancestors are context" can be tested rather than asserted.
+
+**Fact coverage is `None` where a fact is unlabelled, never 1.0.** `recall_at_k` scores an empty
+expectation 1.0 and is right to — "the correct answer is nothing" is a real ACL expectation.
+Here the same convention would flatter: a rule stated once is trivially covered, so counting
+unlabelled entries would let the headline number be raised by adding single-source queries
+rather than by covering anything. The runner prints `facts_measured` beside the rate and
+declines to gate when it is zero.

@@ -74,3 +74,37 @@ def summarize(
         "mrr": sum(mrrs) / len(mrrs),
         "acl_violations": float(violations),
     }
+
+
+def fact_coverage(reached: Iterable[str], facts: Iterable[str]) -> float | None:
+    """Share of the documents stating a fact that the response actually reached (ADR-0037).
+
+    `reached` is every document the response put in front of the reader — the ranked chunks
+    *and* the fact-set members, because coverage is the union and a member is not a lesser
+    kind of source.
+
+    **None when the entry has no fact label**, and that is the whole difference between this
+    and `recall_at_k`. Recall scores an unlabelled query 1.0 by convention, which is right
+    there: "the correct answer is nothing" is a real expectation an ACL case depends on. Here
+    it would be a lie in the flattering direction — a rule stated once is trivially covered, so
+    counting unlabelled entries would let the headline number be raised by adding single-source
+    queries rather than by covering anything.
+    """
+    wanted = set(facts)
+    if not wanted:
+        return None
+    return len(wanted & set(reached)) / len(wanted)
+
+
+def summarize_coverage(scores: Sequence[float | None]) -> dict[str, float]:
+    """Mean coverage over the entries that carry a label, and how many did not.
+
+    Both numbers are reported because one without the other is unreadable: 1.00 over two
+    entries and 1.00 over sixty are different findings, and the count is what separates them.
+    """
+    measured = [score for score in scores if score is not None]
+    return {
+        "fact_coverage": sum(measured) / len(measured) if measured else 0.0,
+        "facts_measured": float(len(measured)),
+        "facts_unlabelled": float(len(scores) - len(measured)),
+    }

@@ -8,6 +8,17 @@
 # `forbidden` lists documents that must never appear for that principal — the canaries are on
 # every entry, which is what turns the quality set into an ACL sweep at the same time.
 #
+# `facts` re-labels an entry per *fact* rather than per query→passage (M10, ADR-0037), and it
+# is a different judgement from `relevant`: that grades "which passages answer this query",
+# this names "which documents state the rule the answer turns on". A document can be relevant
+# supporting context without stating the rule, and a document can state the rule in words no
+# ranking will surface — which is the case fact coverage exists to measure.
+#
+# Only entries whose fact genuinely spans more than one document carry it. An entry with no
+# `facts` is reported as *unmeasured* rather than scored 1.0: a rule stated once is trivially
+# covered, and letting those into the denominator would let the headline number be raised by
+# adding single-source queries. Same discipline as eval/harness/supersession.py.
+#
 # Grows with real production queries (M2 onwards). Nightly regression against this set blocks
 # merges to main.
 
@@ -18,6 +29,9 @@
   relevant:
     - { doc: tt41-capital, section: "Chương II > Điều 6 > Khoản 1", grade: 3 }
     - { doc: policy-capital-internal, section: "Phần 2 > Mục 3", grade: 2 }
+  # The 8% minimum is stated by the regulator and restated by the internal policy that
+  # implements it. An answer naming only one of them is not wrong, it is incomplete (INV-13).
+  facts: [tt41-capital, policy-capital-internal]
   forbidden: [canary-1, canary-2, canary-3]
 
 - id: q002
@@ -26,6 +40,9 @@
   principal: user_retail_staff
   relevant:
     - { doc: tt41-capital, section: "Chương II > Điều 6 > Khoản 1", grade: 3 }
+  # Same fact as q001, asked in English. Coverage must not depend on the question's language:
+  # the fact set is seeded by the passage, not by the query.
+  facts: [tt41-capital, policy-capital-internal]
   forbidden: [canary-1, canary-2, canary-3]
 
 - id: q003
@@ -94,6 +111,9 @@
   relevant:
     - { doc: policy-capital-internal, section: "Phần 2 > Mục 3", grade: 3 }
     - { doc: tt41-capital, section: "Chương II > Điều 6 > Khoản 1", grade: 2 }
+  # The buffer is only meaningful against the regulatory minimum it sits above, so both
+  # documents state the rule this answer turns on even though only one states the buffer.
+  facts: [policy-capital-internal, tt41-capital]
   forbidden: [canary-1, canary-2, canary-3]
 
 # Direct probes for the canaries. Every principal must return nothing.

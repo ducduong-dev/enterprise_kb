@@ -20,6 +20,7 @@ from datetime import UTC, date, datetime
 from kb_common.config import get_settings
 from kb_common.db import create_db_engine
 from kb_common.logging import configure_logging, get_logger
+from kb_indexer.chunker import article_number, split_section_path, subject_key
 from kb_ports.adapters.embedding_hashed import HashedEmbeddingAdapter
 from kb_schemas.enums import DocClass, DocStatus, PiiStatus, RefType, SourceType, Visibility
 from kb_schemas.orm import (
@@ -29,6 +30,7 @@ from kb_schemas.orm import (
     DocumentVersionRow,
     GraphServingRow,
 )
+from kb_vntext.sections import build_anchor
 from sqlalchemy import delete, text
 from sqlalchemy.orm import Session
 
@@ -83,7 +85,14 @@ class SeedDoc:
     visibility: Visibility
     allowed_groups: tuple[str, ...]
     effective_from: date
-    sections: tuple[tuple[str, str, str], ...]  # (section_path, citation_label, text)
+    #: (section_path, citation_label, text, titled_path).
+    #:
+    #: `titled_path` is the same chain as the document actually printed it — "Điều 6. Tỷ lệ an
+    #: toàn vốn" rather than "Điều 6" — and it exists for one reason: `subject_key` is built
+    #: from the titles and `section_path` deliberately carries only labels. Writing chunks
+    #: without it reproduced the bug the chunker had until `ad8b695`, where the field two
+    #: features depend on was NULL for the whole corpus and nothing said so.
+    sections: tuple[tuple[str, str, str, str], ...]
 
 
 DOCS: tuple[SeedDoc, ...] = (
@@ -103,12 +112,14 @@ DOCS: tuple[SeedDoc, ...] = (
                 "Điều 6.1, TT 41/2016/TT-NHNN",
                 "Ngân hàng phải duy trì tỷ lệ an toàn vốn tối thiểu 8% tính theo quy định "
                 "tại Thông tư này.",
+                "Chương II. Tỷ lệ an toàn vốn > Điều 6. Tỷ lệ an toàn vốn tối thiểu > Khoản 1",
             ),
             (
                 "Chương II > Điều 12 > Khoản 2",
                 "Điều 12.2, TT 41/2016/TT-NHNN",
                 "Tài sản có rủi ro tín dụng được xác định theo phương pháp tiêu chuẩn, có "
                 "tính đến hệ số rủi ro của từng loại tài sản.",
+                "Chương II. Tỷ lệ an toàn vốn > Điều 12. Tài sản có rủi ro tín dụng > Khoản 2",
             ),
         ),
     ),
@@ -129,6 +140,7 @@ DOCS: tuple[SeedDoc, ...] = (
                 "Bộ phận Quản lý rủi ro thực hiện tính toán tỷ lệ an toàn vốn hằng tháng và "
                 "báo cáo Ủy ban ALCO. The internal buffer is set 150 bps above the regulatory "
                 "minimum.",
+                "Phần 2. Quản lý vốn > Mục 3. Tỷ lệ an toàn vốn tối thiểu",
             ),
         ),
     ),
@@ -148,6 +160,7 @@ DOCS: tuple[SeedDoc, ...] = (
                 "Bước 3, QT 07/2024",
                 "Giao dịch viên đối chiếu giấy tờ tùy thân với dữ liệu CCCD gắn chip trước "
                 "khi mở tài khoản cho khách hàng cá nhân.",
+                "Bước 3. Đối chiếu giấy tờ tùy thân",
             ),
         ),
     ),
@@ -172,6 +185,7 @@ DOCS: tuple[SeedDoc, ...] = (
                 "Phí duy trì tài khoản thanh toán: miễn phí đối với số dư bình quân từ "
                 "2.000.000 VND, hiệu lực từ ngày 01/01/2026. Account maintenance is free "
                 "above an average balance of VND 2,000,000, effective 01 January 2026.",
+                "Phí tài khoản thanh toán",
             ),
             (
                 "Phí rút tiền",
@@ -179,6 +193,7 @@ DOCS: tuple[SeedDoc, ...] = (
                 "Phí rút tiền mặt tại ATM ngoài hệ thống: 3.300 VND/giao dịch, đã bao gồm "
                 "VAT, hiệu lực từ ngày 01/01/2026. Biểu phí đầy đủ được công bố trên "
                 "website ngân hàng.",
+                "Phí rút tiền mặt tại ATM",
             ),
         ),
     ),
@@ -197,6 +212,7 @@ DOCS: tuple[SeedDoc, ...] = (
                 "Mục 4",
                 "Mục 4, HD vận hành quầy",
                 "Cuối ngày, kiểm quỹ và đối chiếu tiền mặt tại quầy với hệ thống core banking.",
+                "Mục 4. Kiểm quỹ cuối ngày",
             ),
         ),
     ),
@@ -220,6 +236,10 @@ CANARIES: tuple[SeedDoc, ...] = tuple(
                 f"Canary {i}",
                 f"CANARY-{token} Nội dung chỉ dành cho Hội đồng quản trị: kế hoạch sáp nhập "
                 f"và tỷ lệ an toàn vốn dự kiến. Board-only merger plan and capital ratio.",
+                # Deliberately titled with the *same* subject as the capital documents. A
+                # canary that shares a fact set is the sharper test: the ACL sweep then proves
+                # coverage cannot reach it either, not merely that ranking did not.
+                f"Section {i}. Tỷ lệ an toàn vốn tối thiểu",
             ),
         ),
     )
@@ -227,9 +247,13 @@ CANARIES: tuple[SeedDoc, ...] = tuple(
 )
 
 #: (src, dst, ref_type) — the amendment chain the M5 fixture builds on.
-EDGES: tuple[tuple[str, str, RefType], ...] = (
-    ("policy-capital-internal", "tt41-capital", RefType.IMPLEMENTS),
-    ("aml-procedure", "tt41-capital", RefType.CITES),
+#: `(src, dst, ref_type, anchors)`. The anchors are what M9b made clause-precise and what
+#: ADR-0037's reference channel joins on: an edge with `anchors = NULL` says two documents are
+#: related and nothing about *which clause*, so a fact set can do nothing with it. Seeded here
+#: because the fixture corpus has to exercise the channel the eval measures.
+EDGES: tuple[tuple[str, str, RefType, tuple[str, ...]], ...] = (
+    ("policy-capital-internal", "tt41-capital", RefType.IMPLEMENTS, ("6",)),
+    ("aml-procedure", "tt41-capital", RefType.CITES, ("12",)),
 )
 
 
@@ -303,7 +327,8 @@ def seed_document(session: Session, doc: SeedDoc, retention_years: int) -> None:
         {"v": version_id, "d": doc_id},
     )
 
-    for index, (section_path, citation, body) in enumerate(doc.sections):
+    for index, (section_path, citation, body, titled) in enumerate(doc.sections):
+        path = split_section_path(section_path)
         session.add(
             ChunkRow(
                 id=sid(f"chunk:{doc.key}:{index}"),
@@ -311,6 +336,11 @@ def seed_document(session: Session, doc: SeedDoc, retention_years: int) -> None:
                 version_id=version_id,
                 section_path=section_path,
                 citation_label=citation,
+                # Derived with the chunker's own functions rather than hand-written, so a
+                # fixture cannot quietly disagree with what publishing a real document does.
+                article=article_number(path),
+                anchor=build_anchor(path),
+                subject_key=subject_key(split_section_path(titled)),
                 text=body,
                 embedding=fake_embedding(body),
                 visibility=doc.visibility.value,
@@ -343,7 +373,7 @@ def fixture_document_ids() -> frozenset[uuid.UUID]:
 
 
 def seed_edges(session: Session) -> None:
-    for src_key, dst_key, ref_type in EDGES:
+    for src_key, dst_key, ref_type, anchors in EDGES:
         src, dst = sid(f"doc:{src_key}"), sid(f"doc:{dst_key}")
         # Upsert on the *natural* key, not the surrogate one. `session.merge` matches by
         # primary key, and an edge between the same two documents can already exist under a
@@ -359,10 +389,11 @@ def seed_edges(session: Session) -> None:
                 INSERT INTO document_refs (id, src_document_id, dst_document_id, ref_type,
                     articles, anchors, detected_by, confirmed_by, created_at)
                 VALUES (:id, :src, :dst, CAST(:ref_type AS ref_type),
-                    NULL, NULL, 'seed', 'seed', :created_at)
+                    NULL, CAST(:anchors AS text[]), 'seed', 'seed', :created_at)
                 ON CONFLICT (src_document_id, dst_document_id, ref_type) DO UPDATE
                 SET detected_by = EXCLUDED.detected_by,
-                    confirmed_by = EXCLUDED.confirmed_by
+                    confirmed_by = EXCLUDED.confirmed_by,
+                    anchors = EXCLUDED.anchors
                 """
             ),
             {
@@ -370,6 +401,7 @@ def seed_edges(session: Session) -> None:
                 "src": src,
                 "dst": dst,
                 "ref_type": ref_type.value,
+                "anchors": list(anchors) or None,
                 "created_at": datetime.now(UTC),
             },
         )

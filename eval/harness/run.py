@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -32,10 +32,21 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(ROOT))
 
-from metrics import acl_violations, ndcg_at_k, recall_at_k, summarize  # noqa: E402
+from metrics import (  # noqa: E402
+    acl_violations,
+    fact_coverage,
+    ndcg_at_k,
+    recall_at_k,
+    summarize,
+    summarize_coverage,
+)
 
 #: M2 acceptance criterion.
 RECALL_THRESHOLD = 0.85
+#: M10 acceptance criterion (ADR-0037). Gated only over the entries that carry a `facts` label;
+#: with a handful of them one miss moves this a long way, so the run prints `facts_measured`
+#: beside it and a reader should treat the two as one number.
+COVERAGE_THRESHOLD = 0.95
 DEFAULT_K = 10
 
 
@@ -49,6 +60,12 @@ class QueryResult:
     violations: list[str]
     recall: float
     ndcg: float
+    #: Every document the response put in front of the reader — ranked chunks *and* fact-set
+    #: members. Distinct from `retrieved`, which is the ranking alone, because the ACL sweep
+    #: has to see both: a fact set is a second query and a leak through it is still a leak.
+    reached: list[str] = field(default_factory=list)
+    #: None when the entry carries no fact label. Not 0.0 and not 1.0 — see `fact_coverage`.
+    coverage: float | None = None
 
 
 def load_golden(path: Path) -> list[dict[str, Any]]:
@@ -108,7 +125,12 @@ def run_entry(engine: Any, entry: dict[str, Any], keys: dict[str, str], k: int) 
     from kb_schemas.api import RetrieveRequest
 
     principal = ALL_PRINCIPALS[entry["principal"]]
-    response = engine.retrieve(principal, RetrieveRequest(query=entry["query"], top_k=k)).response
+    response = engine.retrieve(
+        principal,
+        # Coverage on, always: the ACL sweep runs over this same call, and a channel that is
+        # never exercised is a channel never swept.
+        RetrieveRequest(query=entry["query"], top_k=k, cover_facts=True),
+    ).response
 
     # Document-level grading: the seed corpus has one graded passage per document, and a
     # citation the user can follow is the unit that matters. Passage-level grading arrives
@@ -118,6 +140,15 @@ def run_entry(engine: Any, entry: dict[str, Any], keys: dict[str, str], k: int) 
         key = keys.get(str(chunk.document_id), str(chunk.document_id))
         if key not in retrieved:
             retrieved.append(key)
+
+    # The union: ranking plus coverage. Ranking keeps its own list because recall and nDCG
+    # measure the ranking and must not be flattered by a second query.
+    reached = list(retrieved)
+    for fact_set in response.fact_sets:
+        for member in fact_set.members:
+            key = keys.get(str(member.document_id), str(member.document_id))
+            if key not in reached:
+                reached.append(key)
 
     grades = {item["doc"]: int(item["grade"]) for item in entry.get("relevant") or []}
     forbidden = list(entry.get("forbidden") or [])
@@ -129,9 +160,13 @@ def run_entry(engine: Any, entry: dict[str, Any], keys: dict[str, str], k: int) 
         retrieved=retrieved,
         grades=grades,
         forbidden=forbidden,
-        violations=acl_violations(retrieved, forbidden),
+        # Swept over the union: a document the filter should have withheld is a violation
+        # whether ranking surfaced it or a fact set did.
+        violations=acl_violations(reached, forbidden),
         recall=recall_at_k(retrieved, relevant, k),
         ndcg=ndcg_at_k(retrieved, grades, k),
+        reached=reached,
+        coverage=fact_coverage(reached, entry.get("facts") or []),
     )
 
 
@@ -154,12 +189,16 @@ def report(results: list[QueryResult], k: int) -> dict[str, float]:
     summary = summarize(
         [(result.retrieved, result.grades, result.forbidden) for result in results], k=k
     )
-    print(f"\n{'query':<8} {'principal':<24} {'recall':>7} {'ndcg':>7}  retrieved")
+    summary.update(summarize_coverage([result.coverage for result in results]))
+    print(f"\n{'query':<8} {'principal':<24} {'recall':>7} {'ndcg':>7} {'cover':>7}  retrieved")
     for result in results:
         flag = "  ACL VIOLATION" if result.violations else ""
+        # "—" and "0.00" mean opposite things: no fact label, versus a labelled fact this
+        # response missed entirely.
+        cover = f"{result.coverage:>7.2f}" if result.coverage is not None else f"{'—':>7}"
         print(
             f"{result.query_id:<8} {result.principal:<24} "
-            f"{result.recall:>7.2f} {result.ndcg:>7.2f}  "
+            f"{result.recall:>7.2f} {result.ndcg:>7.2f} {cover}  "
             f"{', '.join(result.retrieved[:4]) or '—'}{flag}"
         )
     print("\n" + "  ".join(f"{name}={value:.3f}" for name, value in summary.items()))
@@ -172,6 +211,7 @@ def main() -> int:
     parser.add_argument("--k", type=int, default=DEFAULT_K)
     parser.add_argument("--dry-run", action="store_true", help="validate the set only")
     parser.add_argument("--threshold", type=float, default=RECALL_THRESHOLD)
+    parser.add_argument("--coverage-threshold", type=float, default=COVERAGE_THRESHOLD)
     args = parser.parse_args()
 
     entries = load_golden(args.golden)
@@ -206,7 +246,29 @@ def main() -> int:
         )
         return 3
 
-    print(f"\nOK: recall@{args.k}={recall:.3f}, no ACL violations")
+    measured = summary["facts_measured"]
+    coverage = summary["fact_coverage"]
+    if measured and coverage < args.coverage_threshold:
+        print(
+            f"\nFAILED: fact coverage {coverage:.3f} over {measured:.0f} labelled "
+            f"fact(s), below the {args.coverage_threshold} threshold",
+            file=sys.stderr,
+        )
+        return 4
+    if not measured:
+        # Not a pass. The same distinction eval/harness/supersession.py draws: a metric with an
+        # empty denominator is a statement about the fixtures, and printing it as green would
+        # let the label set be emptied without anything going red.
+        print("\nNOTE: no entry carries a `facts` label — fact coverage was not measured")
+
+    print(
+        f"\nOK: recall@{args.k}={recall:.3f}, no ACL violations"
+        + (
+            f", fact coverage={coverage:.3f} over {measured:.0f} labelled fact(s)"
+            if measured
+            else ""
+        )
+    )
     return 0
 
 
