@@ -140,6 +140,21 @@ button.secondary { background: var(--muted); }
 .chat__citations { margin: 0.75rem 0 0; padding-left: 1.2rem; display: grid; gap: 0.6rem; }
 .chat__citations li { padding: 0.3rem 0.4rem; border-radius: 4px; }
 .chat__citations li.is-highlighted { background: #fff3bf; }
+
+/* Fact sets and sources (M10, ADR-0037/0038). Both lists answer "who else says this", so both
+   sit *under* the thing they qualify and neither competes with it for attention. */
+.factset { margin-top: 0.6rem; border-left: 3px solid var(--line); padding-left: 0.7rem; }
+.factset__head { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
+.factset ul { list-style: none; margin: 0.35rem 0 0; padding: 0; display: grid; gap: 0.45rem; }
+.factset__snippet { margin: 0.15rem 0 0; font-size: 0.9rem; color: var(--muted); }
+.chat__sources { margin-top: 0.75rem; font-size: 0.9rem; }
+.chat__sources summary { cursor: pointer; color: var(--muted); }
+.chat__sources ul { list-style: none; margin: 0.4rem 0 0; padding: 0; display: grid; gap: 0.3rem; }
+/* A source the model was given and wrote around. Marked rather than hidden: the gap between
+   what was read and what was cited is the only place a reader can see it. */
+.chat__sources li.is-uncited { border-left: 2px solid #ffd43b; padding-left: 0.5rem; }
+/* The clause a citation link named, once the reader has been scrolled to it. */
+.chunk--cited { background: #fff9db; border-radius: 4px; }
 .chat__citations blockquote {
   margin: 0.3rem 0 0; padding-left: 0.7rem; border-left: 2px solid var(--line);
   color: var(--muted); font-size: 0.9rem;

@@ -346,6 +346,36 @@ def test_search_forwards_the_users_own_token(
     assert forwarded.top_k == 5
 
 
+def test_search_forwards_the_grouping_request(
+    client: TestClient, retrieval_client: RecordingRetrievalClient
+) -> None:
+    """ "Four documents state this" is an answer to a search as much as to a question
+    (ADR-0037) — but only if portal-api passes the checkbox on, and a pass-through that
+    silently drops a field looks identical to a funnel that found nothing."""
+    client.post(
+        "/v1/search",
+        json={"query": "vốn", "cover_facts": True},
+        headers={"Authorization": f"Bearer {make_token()}"},
+    )
+    ((_, forwarded),) = retrieval_client.calls
+    assert isinstance(forwarded, RetrieveRequest)
+    assert forwarded.cover_facts is True
+
+
+def test_search_does_not_group_unless_asked(
+    client: TestClient, retrieval_client: RecordingRetrievalClient
+) -> None:
+    """Grouping costs extra queries per seed; somebody paging a ranked list does not need it."""
+    client.post(
+        "/v1/search",
+        json={"query": "vốn"},
+        headers={"Authorization": f"Bearer {make_token()}"},
+    )
+    ((_, forwarded),) = retrieval_client.calls
+    assert isinstance(forwarded, RetrieveRequest)
+    assert forwarded.cover_facts is False
+
+
 def test_search_passes_facets_through_as_narrowing(
     client: TestClient, retrieval_client: RecordingRetrievalClient
 ) -> None:

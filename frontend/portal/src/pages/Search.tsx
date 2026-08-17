@@ -11,9 +11,25 @@
  *     knows has been amended.
  *  3. **Facets narrow, never widen.** The controls here can only ever remove results. There
  *     is no visibility or group control, because the server would refuse one anyway (INV-2).
+ *
+ * M10 adds a fourth. **"Four documents state this" is an answer to a search**, not only to a
+ * question (ADR-0037). With grouping on, a result carries the other documents stating the same
+ * rule, each labelled with *how* it was found — because "the bank said these are the same rule"
+ * and "they read alike" are different grounds for a reader to trust a source. Grouping is a
+ * checkbox rather than the default: it costs extra queries per seed, and somebody paging a
+ * ranked list to find one clause does not need it.
  */
 import { FormEvent, useState } from "react";
-import { ApiError, Category, RetrieveResponse, search } from "../api";
+import { Link } from "react-router-dom";
+import { ApiError, Category, FactSet, RetrieveResponse, search } from "../api";
+
+/** How a member of a fact set was found. Shown, never scored — the three are different kinds
+ *  of evidence rather than three points on one scale. */
+const CHANNEL_LABEL: Record<string, string> = {
+  reference: "văn bản dẫn chiếu",
+  subject: "cùng chủ đề",
+  vector: "nội dung tương tự",
+};
 
 const DOC_CLASSES = [
   { value: "", label: "Mọi loại văn bản" },
@@ -27,11 +43,49 @@ interface Props {
   categories: Category[];
 }
 
+function factSetFor(results: RetrieveResponse, chunkId: string): FactSet | undefined {
+  return results.fact_sets.find((set) => set.seed_chunk_id === chunkId);
+}
+
+function FactSetPanel({ set }: { set: FactSet | undefined }) {
+  if (!set || set.members.length === 0) return null;
+  // The count includes this result, because "N documents state this" is the sentence a reader
+  // wants and the seed is one of them.
+  const total = set.members.length + 1;
+  return (
+    <div className="factset">
+      <div className="factset__head">
+        {total} văn bản cùng quy định nội dung này
+        {set.truncated > 0 && (
+          <span className="hint"> · còn {set.truncated} văn bản chưa hiển thị</span>
+        )}
+      </div>
+      <ul>
+        {set.members.map((member) => (
+          <li key={member.chunk_id}>
+            <Link to={`/documents/${member.document_id}`}>
+              {member.document_title ?? "Văn bản"} — {member.citation_label ?? member.section_path}
+            </Link>
+            <span className="tag"> {CHANNEL_LABEL[member.channel] ?? member.channel}</span>
+            {member.superseded_by && (
+              <span className="warn">
+                {" "}· đã được thay thế từ {member.superseded_by.supersedes_from}
+              </span>
+            )}
+            <p className="factset__snippet">{member.text.slice(0, 240)}</p>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export function Search({ categories }: Props) {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
   const [docClass, setDocClass] = useState("");
   const [expandGraph, setExpandGraph] = useState(true);
+  const [groupFacts, setGroupFacts] = useState(true);
   const [results, setResults] = useState<RetrieveResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,6 +103,7 @@ export function Search({ categories }: Props) {
           category: category || undefined,
           doc_class: docClass || undefined,
           expand_graph: expandGraph,
+          cover_facts: groupFacts,
         }),
       );
     } catch (err) {
@@ -113,6 +168,15 @@ export function Search({ categories }: Props) {
             />
             Hiển thị văn bản liên quan
           </label>
+
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={groupFacts}
+              onChange={(event) => setGroupFacts(event.target.checked)}
+            />
+            Gộp theo nội dung quy định
+          </label>
         </div>
       </form>
 
@@ -153,6 +217,7 @@ export function Search({ categories }: Props) {
               điểm {chunk.score.toFixed(3)}
               {chunk.section_path ? ` · ${chunk.section_path}` : ""}
             </div>
+            <FactSetPanel set={factSetFor(results, chunk.chunk_id)} />
           </li>
         ))}
       </ol>

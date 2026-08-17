@@ -11,7 +11,8 @@
  * rewritten whole by the publish transaction (INV-5). The one write offered is *re-chunk*,
  * which runs the same text through chunking again; wrong text is fixed by a new version.
  */
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   ApiError,
   ChunkView,
@@ -518,13 +519,49 @@ function EdgeList({
   );
 }
 
+/**
+ * The banner a followed citation raises when it names a version that is no longer current.
+ *
+ * A link inside a six-month-old answer points at the version that was actually cited (ADR-0038),
+ * and this page shows the *canonical* one. Saying nothing would quietly re-point the link —
+ * the reader would see today's text believing it is what the answer quoted, which is the exact
+ * failure the version in the link exists to prevent. The archived text itself is a different
+ * request with its own gate and its own audit action, so what this offers is the honest middle:
+ * name the mismatch, date both, and let the reader decide.
+ */
+function VersionNotice({
+  data,
+  requested,
+}: {
+  data: DocumentInspection;
+  requested: string | null;
+}) {
+  if (!requested) return null;
+  const canonical = data.document.canonical_version_id;
+  if (!canonical || requested === canonical) return null;
+  const cited = data.versions.find((version) => version.version_id === requested);
+  return (
+    <p className="warn" role="status">
+      Liên kết bạn vừa mở dẫn tới bản ban hành ngày{" "}
+      {cited?.created_at.slice(0, 10) ?? "không rõ"} — đây không còn là bản hiện hành. Nội dung
+      hiển thị bên dưới là bản hiện hành; hãy đối chiếu nếu bạn đang kiểm tra một câu trả lời cũ.
+    </p>
+  );
+}
+
 export function DocumentDetail({ documentId }: { documentId: string }) {
+  const [searchParams] = useSearchParams();
+  //: Both come from a citation link (ADR-0038). `version` says which text the answer quoted;
+  //: `section` says where in it to look.
+  const requestedVersion = searchParams.get("version");
+  const requestedSection = searchParams.get("section");
   const [data, setData] = useState<DocumentInspection | null>(null);
   const [chunks, setChunks] = useState<ChunkView[] | null>(null);
   const [showTombstoned, setShowTombstoned] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const citedChunk = useRef<HTMLLIElement | null>(null);
 
   const load = useCallback(() => {
     inspectDocument(documentId)
@@ -537,6 +574,15 @@ export function DocumentDetail({ documentId }: { documentId: string }) {
   }, [documentId]);
 
   useEffect(load, [load]);
+
+  //: Scroll the cited clause into view once the chunks are on screen. A citation that lands a
+  //: reader at the top of a sixty-article circular has told them which document and left them
+  //: to find the clause, which is most of the work.
+  useEffect(() => {
+    if (requestedSection && citedChunk.current) {
+      citedChunk.current.scrollIntoView({ block: "center" });
+    }
+  }, [requestedSection, chunks]);
 
   useEffect(() => {
     if (!showTombstoned) return;
@@ -669,6 +715,8 @@ export function DocumentDetail({ documentId }: { documentId: string }) {
           {data.document.visibility} · {STATUS_LABEL[data.document.status] ?? data.document.status}
         </p>
       </header>
+
+      <VersionNotice data={data} requested={requestedVersion} />
 
       {error && <p className="error">{error}</p>}
       {notice && <p className="notice">{notice}</p>}
@@ -815,7 +863,13 @@ export function DocumentDetail({ documentId }: { documentId: string }) {
           {shown.map((chunk) => (
             <li
               key={chunk.chunk_id}
-              className={chunk.tombstoned ? "chunk chunk--tombstoned" : "chunk"}
+              ref={chunk.section_path === requestedSection ? citedChunk : undefined}
+              className={[
+                chunk.tombstoned ? "chunk chunk--tombstoned" : "chunk",
+                chunk.section_path === requestedSection ? "chunk--cited" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
             >
               <div className="chunk__meta">
                 #{chunk.ordinal} · {chunk.citation_label ?? chunk.section_path ?? "không có mục"} ·

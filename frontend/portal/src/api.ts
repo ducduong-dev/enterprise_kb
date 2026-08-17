@@ -81,12 +81,34 @@ export interface RetrievedChunk {
   chunk_id: string;
   version_id: string;
   document_id: string;
+  document_title: string | null;
   citation_label: string | null;
   section_path: string | null;
   text: string;
   score: number;
   highlights: string[];
   supersession_flag: boolean;
+  superseded_by: SupersededBy | null;
+}
+
+/** One other passage stating the same rule as a seed (M10, ADR-0037). */
+export interface FactMember {
+  chunk_id: string;
+  document_id: string;
+  version_id: string;
+  document_title: string | null;
+  citation_label: string | null;
+  section_path: string | null;
+  text: string;
+  channel: "reference" | "subject" | "vector";
+  superseded_by: SupersededBy | null;
+}
+
+export interface FactSet {
+  seed_chunk_id: string;
+  members: FactMember[];
+  /** Members the cap removed. Spoken, unlike what the filter removed. */
+  truncated: number;
 }
 
 export interface GraphExpansion {
@@ -99,6 +121,8 @@ export interface GraphExpansion {
 export interface RetrieveResponse {
   chunks: RetrievedChunk[];
   expansions: GraphExpansion[];
+  /** One per seed, when coverage was asked for. Empty also means "not asked for". */
+  fact_sets: FactSet[];
   /** Identifies the ACL filter the server applied; joins this page to its audit record. */
   resolved_filter_id: string;
 }
@@ -111,6 +135,8 @@ export interface SearchParams {
   department?: string;
   doc_class?: string;
   expand_graph?: boolean;
+  /** Ask for fact sets so results can be grouped by rule rather than only ranked (ADR-0037). */
+  cover_facts?: boolean;
 }
 
 export interface KBDocBlock {
@@ -186,6 +212,17 @@ export interface ReviewTask {
   payload: Record<string, unknown>;
 }
 
+/** The clause that replaced this one, when a confirmed supersession named it (ADR-0033).
+ *  Every field but `supersedes_from` is null when the reader may not open the replacement —
+ *  the warning is unconditional, the identity is not. */
+export interface SupersededBy {
+  supersedes_from: string;
+  document_id: string | null;
+  section_path: string | null;
+  document_title: string | null;
+  citation_label: string | null;
+}
+
 export interface ChatCitation {
   marker: number;
   label: string;
@@ -195,6 +232,26 @@ export interface ChatCitation {
   section_path: string | null;
   quote: string | null;
   supersession_flag: boolean;
+  superseded_by: SupersededBy | null;
+  /** Where to open it, from (document_id, version_id, section_path) — never the chunk id,
+   *  which every rechunk re-mints (ADR-0038). Relative; this app is the origin. */
+  link: string;
+}
+
+/** A document the answer was built from, cited or not (ADR-0037/0038).
+ *  Longer than `citations` whenever the model wrote around a passage it was given, and that
+ *  gap is the point: an answer that read four documents and cited one looks better-sourced
+ *  than it is. */
+export interface ChatSource {
+  document_id: string;
+  version_id: string;
+  document_title: string | null;
+  citation_label: string | null;
+  section_path: string | null;
+  link: string;
+  channel: "ranked" | "reference" | "subject" | "vector";
+  cited: boolean;
+  superseded_by: SupersededBy | null;
 }
 
 export interface ChatAnswer {
@@ -207,6 +264,7 @@ export interface ChatAnswer {
   resolved_filter_id: string | null;
   warnings: string[];
   redacted: boolean;
+  sources: ChatSource[];
 }
 
 export interface ChatTurn {

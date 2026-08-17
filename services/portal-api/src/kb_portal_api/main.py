@@ -293,6 +293,9 @@ class SearchRequest(BaseModel):
     department: str | None = None
     doc_class: str | None = None
     expand_graph: bool = False
+    #: Group results by rule rather than only ranking them (ADR-0037). A checkbox on the search
+    #: screen, because it costs extra queries per seed and paging a ranked list does not need it.
+    cover_facts: bool = False
 
 
 @app.post("/v1/search", response_model=RetrieveResponse)
@@ -320,6 +323,7 @@ def search(
             top_k=request.top_k,
             facets=facets,
             expand_graph=request.expand_graph,
+            cover_facts=request.cover_facts,
         ),
     )
 
