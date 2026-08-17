@@ -1,6 +1,7 @@
 # ADR-0033 — A detected clause supersession only proposes
 
-**Status:** proposed · **Date:** 2026-08-13
+**Status:** proposed · **Date:** 2026-08-13 · **Amended:** 2026-08-17, by a second reading of
+graphiti-core at source (see *What re-reading Graphiti's source changed* at the end).
 
 ## Context
 
@@ -69,8 +70,9 @@ older.effective_to <= newer.effective_from  or  newer.effective_to <= older.effe
 ```
 
 Exact and free. Borrowed from Graphiti's `resolve_edge_contradictions`, which opens with the same
-guard (`eval/graphrag/protocol.md`). It lives as a pure function as well as a SQL predicate,
-because the interesting cases are boundary dates and those should be testable without a database.
+guard (`graphiti_core/utils/maintenance/edge_operations.py:554-561`, `eval/graphrag/protocol.md`).
+It lives as a pure function as well as a SQL predicate, because the interesting cases are boundary
+dates and those should be testable without a database.
 
 **3 · Scope must match.** `different_scope` is the expensive false positive, and in this corpus
 scope is usually *stated*, not implied: customer segment (cá nhân / doanh nghiệp / ưu tiên),
@@ -90,14 +92,36 @@ a similarity score is not.
 
 **5 · Adjudication**, on what survives, one pair at a time, into four buckets:
 `same_rule_restated` · `superseded` · `different_scope` · `conflicting_unresolved`. The prompt
-carries an instruction taken from Graphiti's `resolve_edge`: *never treat two clauses as the same
-rule restated when they differ in a numeric value, a date, or a qualifier* — for a fee or a rate
-that is the whole distinction, and a model reading for gist will call them identical. The
-adjudicator answers with indices rather than echoed section paths (ADR-0034).
+carries an instruction taken from Graphiti's `resolve_edge`
+(`graphiti_core/prompts/dedupe_edges.py:53`): *never treat two clauses as the same rule restated
+when they differ in a numeric value, a date, or a qualifier* — for a fee or a rate that is the
+whole distinction, and a model reading for gist will call them identical. The adjudicator answers
+with indices rather than echoed section paths (ADR-0034).
+
+The same prompt's third example is worth porting too, translated to a clause pair: *"Bob ran 5
+miles on Tuesday" / "Bob ran 3 miles on Wednesday" → neither duplicate nor contradiction*
+(`dedupe_edges.py:94-96`). Same subject, same numeric shape, different applicability — the hardest
+answer to get out of a model, and exactly the `different_scope` case gate 3 could not settle
+because the text was not explicit. Its *encoding* is what we do not take: Graphiti expresses that
+verdict as two empty lists, which is indistinguishable from a model that found nothing. Ours is a
+named bucket, and that difference is the whole false-supersession measurement below.
+
+**The model nominates; the dates dispose.** Graphiti separates these and it is the better shape:
+`resolve_edge` returns only indices, and a pure date function then decides what is actually
+invalidated (`edge_operations.py:841-844`). So the adjudicator's verdict is not written straight
+into a row — `windows_overlap` and `older_first` are re-applied to the pair the model chose, and
+a verdict that contradicts them is dropped with a log line rather than stored. It costs nothing,
+and it makes a model that nominates a backwards pair unable to produce a backwards row.
 
 The funnel's shape is the point. On NĐ 118/2025 — 208 chunks, measured — five candidates each
 would be 1,040 pairs; gates 2 to 4 are meant to leave the model a small fraction of that, and how
-small is the number the eval reports.
+small is the number the eval reports. If that number makes pairwise calls unaffordable, the
+fallback is Graphiti's batched encoding — one clause against N candidates in a single call, two
+lists sharing one continuous index space with the second offset by the length of the first
+(`edge_operations.py:700-707`). Note before reaching for it that Graphiti's own caller has to
+range-validate both lists separately and log out-of-range values it cannot trust
+(`:735-744`, `:760-767`). That is evidence the encoding is error-prone, and an argument for
+keeping pairs until the backfill's measured cost forces the change.
 
 ### Direction comes from the legal date, never from publish order
 
@@ -107,6 +131,26 @@ digitised in archive order, which is exactly ADR-0028's point, so publish order 
 about which rule came first. Where the effective dates are equal, the instrument's rank decides
 (a Nghị định outranks a Quyết định), and where rank is equal too, nothing is proposed — that is a
 `conflicting_unresolved` for a person.
+
+### Detection is symmetric, because the older text often arrives second
+
+The funnel runs on ingest, which makes it natural to write it as *"does this new clause supersede
+something already indexed?"* — and that is wrong here for the same reason publish order is. The
+archive is digitised in whatever order it yields, so a 2023 circular routinely lands after the
+2026 one is already in the index, and the pair the funnel finds is a real supersession pointing
+the other way. The run must therefore be able to propose the **already-indexed clause as the
+replacement** and the arriving one as replaced, and a detection pass that can only ever produce
+rows in one direction is broken in a way nothing else will report: it simply finds less.
+
+Graphiti handles the same case explicitly. Before invalidating any candidate,
+`resolve_extracted_edge` checks whether a candidate is *newer* than the edge being resolved, and
+if so expires the **incoming** edge instead (`edge_operations.py:825-839`). It reaches the
+answer by sorting candidates on `valid_at` and comparing, never by which arrived first — which is
+this ADR's direction rule arriving at the same place from the same premise.
+
+Concretely: `older_first` decides the roles after the pair is formed, not before, and the
+backfill's acceptance test asserts that ingesting the 2023 and 2026 fixtures **in either order**
+produces the identical proposed row.
 
 ### The record carries the date it takes effect
 
@@ -140,6 +184,14 @@ the matched and mismatched scope facets, the score, the model and prompt version
   rather than hides because the text is still canonical; here the argument is stronger still —
   the clause is still in the document, and a page that omits it lies about what the document says.
 
+When a flagged clause does reach the answer prompt, it carries `supersedes_from` and the
+`superseded_by` pointer as **structured fields beside the passage**, never as a sentence prepended
+to its text. Graphiti serialises facts to the model this way — `valid_at` and `invalid_at` per
+fact, with the reading rule stated once in the surrounding instruction
+(`graphiti_core/search/search_helpers.py:25-57`) — and it is the right shape for a passage the
+model must cite *as* superseded rather than quietly quote. What we do not take is that this is
+Graphiti's only temporal control; see below.
+
 ## Why four buckets and not a confidence score
 
 `different_scope` and `conflicting_unresolved` are not weak instances of `superseded`. They are
@@ -153,6 +205,14 @@ and correctly, for the problem it solves. A specific older rule survives a gener
 routinely, and a model asked "which one applies?" answers confidently either way. Whether that
 judgement is ever automatic for regulatory content is a business ruling (`[OPEN]`-8); until it is
 made, it is a person's.
+
+Reading that code closely adds an argument the framework evaluation did not make: **there is no
+way back.** `expired_at` is set once, in the same transaction as ingest, and nothing in
+graphiti-core ever clears it — an invalidation is not a state a reviewer can reverse, because it
+is not a state at all. This ledger's `revoked` restores the clause, and the acceptance criteria
+require it to. For a corpus where a steward can be wrong about which of two rules survived, an
+irreversible automatic decision is the disqualifying property, more so than the missing review
+step: a review step can be added to a design that can be undone.
 
 ## Consequences
 
@@ -174,3 +234,30 @@ made, it is a person's.
   **false-supersession rate** on the `different_scope` bucket, which is what must not get worse.
   Gate 3 is expected to carry most of the second number, and the eval reports the split between
   pairs it resolved and pairs the model did.
+
+## What re-reading Graphiti's source changed
+
+Written 2026-08-13 from the framework evaluation, before gate 5 existed. graphiti-core 0.29.3 was
+re-read at source on 2026-08-17 — the same version `eval/graphrag/protocol.md` measured — with the
+narrower question of what its *temporal* machinery has that this design does not. The adoption
+answer is unchanged and the gate in the protocol still decides it. Four things above are new, and
+are recorded here rather than folded in silently because each changes something buildable:
+
+1. **Detection is symmetric** (new subsection). The gap this closes was ours, not the protocol's:
+   nothing in the 13 August text said which document the funnel runs *from*, and the obvious
+   reading produces a one-directional detector on a corpus ingested in archive order.
+2. **The model nominates, the dates dispose** (gate 5). A shape borrowed from the split between
+   `resolve_edge` and `resolve_edge_contradictions`, not from either one of them.
+3. **The abstention example** (gate 5), ported for its content and explicitly not for its
+   encoding — Graphiti has no fourth bucket, and says "different scope" by saying nothing.
+4. **Irreversibility** (why four buckets). The evaluation recorded that Graphiti's invalidation is
+   automatic and unreviewable; what the source adds is that it is also unrevocable, which is the
+   stronger objection and the one that survives someone proposing to bolt a review queue on.
+
+One thing was checked and needed no change. Graphiti uses a half-open convention — the invalidated
+edge's `invalid_at` is set to its successor's `valid_at` (`edge_operations.py:569`) — while the
+declared path here uses closed intervals, `effective_to` being the last day the rule applied. Both
+conventions coexist in this platform, but `DeclarationReview._dates` returns the pair from one
+function with the boundary reasoning stated in its docstring, so the changeover day has one
+answer. The detected path writes `supersedes_from` and no expiry, so only one end of that pair
+applies to it — and it takes the date from the same helper rather than recomputing it.

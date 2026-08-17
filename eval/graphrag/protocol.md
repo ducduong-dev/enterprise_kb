@@ -6,7 +6,9 @@ the platform. Same shape as `eval/bakeoff/protocol.md`: a gate first, scores onl
 passes.
 
 Versions examined: **graphiti-core 0.29.3** (Apache-2.0) and **LightRAG 1.5.7** (MIT), read at
-source on 2026-08-13.
+source on 2026-08-13. Graphiti's temporal machinery was re-read at source on **2026-08-17**, same
+version, checked out at `/home/clt/workspace/mbbank/graphiti`; that pass added G6 and G7 below and
+four notes to ADR-0033. It did not change the adoption answer.
 
 ## Gate (pass/fail, evaluated first)
 
@@ -20,10 +22,20 @@ they are the gate. An entry failing any item is out regardless of retrieval qual
 | G3 | **One Postgres transaction** for canonical flip, chunks, edges and outbox (INV-5). | **fail** — requires Neo4j, FalkorDB, Kuzu or Neptune; no Postgres driver exists | **pass** — a Postgres/pgvector backend is supported |
 | G4 | **A machine may propose, only a human confirms**, for regulated classes (INV-8, ADR-0033). | **fail** — invalidation is automatic and unreviewable; there is no proposed/confirmed state anywhere in the codebase | n/a — no invalidation to review |
 | G5 | **Temporal validity is representable at all** — a fact can cease to apply on a date. | **pass** — `valid_at`, `invalid_at`, `created_at`, `expired_at` on every edge, with date filters in `SearchFilters` | **fail** — no temporal, validity or versioning concept in the core modules |
+| G6 | **Temporal validity is enforced on the read path by construction**, not by the caller remembering to ask (INV-1/2). | **fail** — filtering is opt-in via `SearchFilters` (`search/search_filters.py:62-65`); the default path returns expired facts and hands the model their dates with a note asking it to reason (`search/search_helpers.py:25-57`) | n/a — nothing to enforce |
+| G7 | **An expiry decision can be reversed** — a steward who was wrong can restore the clause (ADR-0030's `revoked`). | **fail** — `expired_at` is set once and never cleared anywhere in the codebase; invalidation is not a state, so there is nothing to revoke | n/a |
 
 Neither entry reaches the scored comparison. G1 and G2 are the decisive ones and they are
 architectural: they would be failed by any framework whose retrievable unit is a machine-derived
 fact rather than a clause of a document the bank holds.
+
+G6 and G7 were added on the second reading and are worth stating separately from G4 even though
+Graphiti fails all three. G4 says a machine decides without review; G7 says the decision cannot be
+undone afterwards, which is the harder problem — a review queue can be added to a design that is
+reversible, and cannot rescue one that is not. G6 is the one to keep in mind for any future
+graph-RAG layer (see *Re-opening*): a component can be perfectly temporal in its storage and still
+serve an expired rule, because the filter is a thing the caller opts into rather than a predicate
+compiled into the query.
 
 ## What was measured, and what could not be
 
@@ -79,12 +91,42 @@ when models are available:
    `resolve_edge` prompt (`duplicate_facts` / `contradicted_facts`, ported verbatim); and a
    naive "newer wins" baseline that consults only the effective dates.
 3. Report precision and recall per bucket, and separately the **false-supersession rate** on the
-   different-scope pairs. That is the number the design turns on: Graphiti's prompt has no
-   abstention output and its `resolve_edge_contradictions` then invalidates purely on `valid_at`
-   ordering, so a different-scope pair is expected to resolve as a contradiction. Measuring by
-   how much is worth the afternoon.
+   different-scope pairs. That is the number the design turns on. Refined by the second reading:
+   Graphiti's prompt does have an abstention *case* — its third example returns two empty lists
+   for two facts that differ in context rather than in truth (`prompts/dedupe_edges.py:94-96`) —
+   but no abstention *output*, so "different scope" and "found nothing" are the same answer, and
+   `resolve_edge_contradictions` then invalidates purely on `valid_at` ordering
+   (`utils/maintenance/edge_operations.py:565-571`). A different-scope pair is still expected to
+   resolve as a contradiction; what the port must reproduce faithfully is the empty-list
+   convention, or the comparison flatters us.
 4. If Graphiti's prompt wins on the superseded bucket, port its examples into the platform's
-   prompt rather than its architecture.
+   prompt rather than its architecture. Two are already scheduled for porting on their face
+   regardless of the outcome — the numeric-difference instruction and the different-context
+   example — so the experiment's real question is narrower than it looks: whether anything in the
+   *rest* of that prompt beats the four-bucket framing.
+
+## What was taken instead
+
+Rejecting a framework is not the same as learning nothing from it. Graphiti solves a genuinely
+harder version of the direction problem — it has no legal dates, no instrument ranks and no
+declaring sentences — and everything below is borrowed with the ADR that took it. Kept here as
+one list so a future reader can see the borrowings without re-reading seven ADRs.
+
+| Taken | From | Where |
+|---|---|---|
+| Two clocks on every row: world time and belief time, append-only, invalidate-never-delete | `EntityEdge.valid_at`/`invalid_at` vs `created_at`/`expired_at` (`edges.py:271-281`) | ADR-0030 |
+| Disjoint-window guard before anything else | `resolve_edge_contradictions` (`edge_operations.py:554-561`) | ADR-0033, gate 2 |
+| A model answers with indices into a list it was given, never with echoed keys | `EdgeDuplicate.duplicate_facts` / `contradicted_facts` | ADR-0034 |
+| *Never* call two facts the same when a numeric value, date or qualifier differs | `resolve_edge` (`prompts/dedupe_edges.py:53`) | ADR-0033, gate 5 |
+| The different-context abstention example, translated to a clause pair | `prompts/dedupe_edges.py:94-96` | ADR-0033, gate 5 |
+| The model nominates, a pure date function disposes | the split between `resolve_edge` and `resolve_edge_contradictions` | ADR-0033, gate 5 |
+| Detection must be able to point *backwards*, because the older text often arrives second | `resolve_extracted_edge` expiring the incoming edge (`edge_operations.py:825-839`) | ADR-0033 |
+| Validity dates travel to the model as structured fields beside the passage | `search_results_to_context_string` (`search/search_helpers.py:25-57`) | ADR-0033 |
+| Read the stated date; only call a model when none was stated, and never let it invent one | `_extract_edge_timestamps`' early return (`edge_operations.py:587`) and its prompt's *"NEVER hallucinate dates"* | independently arrived at in ADR-0013/0029, confirmed here |
+
+The last row is the useful negative result: on the one question both designs answer the same way,
+Graphiti reached the same rule from the opposite starting point. That is worth more confidence in
+the rule than either design alone gives.
 
 ## Re-opening
 
