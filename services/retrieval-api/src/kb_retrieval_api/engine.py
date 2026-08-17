@@ -15,6 +15,7 @@ Pipeline:
               → per-document cap, top_k
               → supersession flags and replacement pointers
               → graph expansion, filtered by the same ACL (INV-10)
+              → coverage: the other documents stating each seed's rule (ADR-0037)
               → audit record naming principal, delegate, filter, and every chunk returned (INV-11)
 
 Nothing is filtered after the fact. If a chunk reaches this code, the index already decided the
@@ -48,6 +49,8 @@ from kb_ports.models import EmbeddingPort, RerankPort
 from kb_schemas.api import (
     CitationLookupRequest,
     ExpiredMatch,
+    FactMember,
+    FactSet,
     GraphExpansion,
     ResolveAnchorRequest,
     ResolveAnchorResponse,
@@ -64,6 +67,7 @@ from kb_vntext.sections import anchor_families, anchor_matches
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from kb_retrieval_api.coverage import cover, load_seed, withheld_count
 from kb_retrieval_api.fusion import (
     ClauseKey,
     FusedHit,
@@ -180,12 +184,24 @@ class RetrievalEngine:
         # stopped applying in December" (ADR-0028/0030).
         expired = self._expired_matches(request.query, acl) if not chunks else []
 
+        # After the drop, so a fact set never gains a member the fusion stage just removed, and
+        # after the per-document cap, so the seeds are the passages the answer is built from.
+        fact_sets, withheld = self._cover(acl, chunks, request) if request.cover_facts else ([], 0)
+
         elapsed = time.perf_counter() - started
         retrieval_latency.labels(stage="total").observe(elapsed)
         retrieval_results.observe(len(chunks))
 
         self._audit_retrieval(
-            principal, acl, chunks, expansions, request, dropped, duration_ms=int(elapsed * 1000)
+            principal,
+            acl,
+            chunks,
+            expansions,
+            request,
+            dropped,
+            fact_sets,
+            withheld,
+            duration_ms=int(elapsed * 1000),
         )
         log.info(
             "retrieval_complete",
@@ -197,6 +213,7 @@ class RetrievalEngine:
                 "returned": len(chunks),
                 "expansions": len(expansions),
                 "expired_matches": len(expired),
+                "fact_members": sum(len(f.members) for f in fact_sets),
                 "mode": request.mode.value,
                 "duration_ms": int(elapsed * 1000),
             },
@@ -206,6 +223,7 @@ class RetrievalEngine:
                 chunks=chunks,
                 expansions=expansions,
                 expired_matches=expired,
+                fact_sets=fact_sets,
                 resolved_filter_id=acl.filter_id,
             ),
             resolved_filter=acl,
@@ -417,6 +435,66 @@ class RetrievalEngine:
             {"ids": [str(document_id) for document_id in document_ids]},
         ).all()
         return {row[0]: row[1] for row in rows}
+
+    def _cover(
+        self, acl: ResolvedFilter, chunks: list[RetrievedChunk], request: RetrieveRequest
+    ) -> tuple[list[FactSet], int]:
+        """The fact set for each of the top seeds (M10, ADR-0037).
+
+        Runs last, after the drop and after the per-document cap, for two reasons. The seeds
+        are then the passages the answer is actually built from rather than whatever ranking
+        put in front of them; and a fact set cannot re-admit a clause the supersession drop
+        just removed, which would undo the drop through a side door.
+
+        Members already present in `chunks` are excluded: they are not *coverage*, they are the
+        ranking, and counting them would make a set look wider than the corpus it reached.
+
+        A confirmed supersession inside a set is labelled, not removed. The set answers "who
+        else states this rule", and a clause that stated it until last January is part of that
+        answer — with its pointer, so nobody reads it as current.
+        """
+        seeds = chunks[: request.fact_seeds]
+        if not seeds:
+            return [], 0
+
+        present = {chunk.chunk_id for chunk in chunks}
+        sets: list[FactSet] = []
+        withheld = 0
+        for chunk in seeds:
+            seed = load_seed(self._session, chunk.chunk_id)
+            if seed is None:  # pragma: no cover - the chunk came from this database
+                continue
+            coverage = cover(self._session, acl, seed)
+            members = [m for m in coverage.members if m.chunk_id not in present]
+            withheld += withheld_count(self._session, seed, coverage.members)
+            if not members:
+                continue
+            pointers = self._replacement_labels(
+                self._clause_supersessions({m.document_id for m in members}, acl.effective_on),
+                acl,
+            )
+            sets.append(
+                FactSet(
+                    seed_chunk_id=chunk.chunk_id,
+                    members=[
+                        FactMember(
+                            chunk_id=m.chunk_id,
+                            document_id=m.document_id,
+                            version_id=m.version_id,
+                            document_title=m.document_title,
+                            citation_label=m.citation_label,
+                            section_path=m.section_path,
+                            text=m.text,
+                            channel=m.channel,
+                            superseded_by=pointers.get((m.document_id, m.section_path or "")),
+                        )
+                        for m in members
+                    ],
+                    truncated=coverage.truncated,
+                )
+            )
+            present.update(m.chunk_id for m in members)
+        return sets, withheld
 
     def _clause_supersessions(
         self, document_ids: set[uuid.UUID], on: date
@@ -833,6 +911,8 @@ class RetrievalEngine:
         expansions: list[GraphExpansion],
         request: RetrieveRequest,
         dropped: list[FusedHit],
+        fact_sets: list[FactSet],
+        withheld: int,
         *,
         duration_ms: int,
     ) -> None:
@@ -855,6 +935,9 @@ class RetrievalEngine:
                     "document_ids": sorted({str(chunk.document_id) for chunk in chunks}),
                     "expansion_document_ids": [str(e.document_id) for e in expansions],
                     "superseded_dropped": [str(item.hit.chunk_id) for item in dropped],
+                    "fact_member_ids": [
+                        str(m.chunk_id) for fact_set in fact_sets for m in fact_set.members
+                    ],
                 },
                 resolved_filter=acl.audit_payload(),
                 detail={
@@ -864,6 +947,12 @@ class RetrievalEngine:
                     "mode": request.mode.value,
                     "top_k": request.top_k,
                     "duration_ms": duration_ms,
+                    # How many documents the *filter* kept out of the fact sets. Audit-only and
+                    # never returned: a reviewer asking why an answer missed something has to
+                    # tell "we did not have it" from "they could not see it" (INV-11), and a
+                    # count in the response would let the filter's work be inferred (ADR-0023).
+                    "fact_members_withheld": withheld,
+                    "fact_members_truncated": sum(f.truncated for f in fact_sets),
                 },
             )
         )

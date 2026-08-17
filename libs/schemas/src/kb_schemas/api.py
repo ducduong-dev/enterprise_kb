@@ -45,6 +45,13 @@ class RetrieveRequest(BaseModel):
     as_of_date: date | None = None
     facets: Facets | None = None
     expand_graph: bool = False
+    #: Run the coverage pass and return `fact_sets` (M10, ADR-0037). Off by default because it
+    #: costs extra queries per seed and the search UI pages `chunks` without needing it; chat
+    #: turns it on, because "which documents state this rule" is what INV-13 promises an answer.
+    cover_facts: bool = False
+    #: Seeds taken from the top of the ranked list. More seeds means more of the corpus reached
+    #: and more queries run; three covers the passages an answer is actually built from.
+    fact_seeds: int = Field(default=3, ge=1, le=10)
 
     @model_validator(mode="after")
     def _check_as_of(self) -> RetrieveRequest:
@@ -177,6 +184,45 @@ class ExpiredMatch(BaseModel):
     expired_on: date
 
 
+class FactMember(BaseModel):
+    """One other passage stating the same rule as a seed (M10, ADR-0037)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: UUID
+    document_id: UUID
+    version_id: UUID
+    document_title: str | None = None
+    citation_label: str | None = None
+    section_path: str | None = None
+    text: str = ""
+    #: How this member was found: `reference` (the corpus said so), `subject` (exact key) or
+    #: `vector` (reads alike). Not a score — the three are different kinds of evidence, and a
+    #: reader deciding whether to trust a source list needs to know which one this was.
+    channel: Literal["reference", "subject", "vector"]
+    #: Confirmed-superseded members carry their pointer here too, so a fact set never presents
+    #: a replaced clause as an equal source (ADR-0033).
+    superseded_by: SupersededBy | None = None
+
+
+class FactSet(BaseModel):
+    """A seed passage and the other documents that state its rule.
+
+    Returned beside `chunks` rather than merged into them, deliberately. `chunks` answers
+    "what best matches this question" and is what search ranks and pages; this answers "who
+    else says it", which is a different question with a different shape. Assembly unions them
+    (coverage before depth); search groups by them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    seed_chunk_id: UUID
+    members: list[FactMember] = Field(default_factory=list)
+    #: Members the cap removed. Spoken to the reader — an answer built from part of the
+    #: evidence says so — unlike the count the *filter* removed, which is audit-only.
+    truncated: int = 0
+
+
 class RetrieveResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -185,6 +231,9 @@ class RetrieveResponse(BaseModel):
     #: Populated only when the funnel found nothing current. The answer says the rule ended
     #: rather than that nothing was found.
     expired_matches: list[ExpiredMatch] = Field(default_factory=list)
+    #: One per seed, when coverage ran. Empty is not "no other document states this" — it is
+    #: also what a request that did not ask for coverage returns.
+    fact_sets: list[FactSet] = Field(default_factory=list)
     #: Hash of the filter actually applied — joins this response to its audit record (INV-11).
     resolved_filter_id: str
 
