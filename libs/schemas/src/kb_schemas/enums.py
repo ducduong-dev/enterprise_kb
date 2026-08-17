@@ -60,6 +60,11 @@ class ReviewTaskType(StrEnum):
     #: procedure is still accurate. A separate queue from the above because it is different
     #: work on a different rhythm.
     PERIODIC_REVIEW = "periodic_review"
+    #: The funnel proposed that one clause replaced another and wants a person (ADR-0033).
+    #: Distinct from `EXPIRY_REVIEW` because it is a different question asked of different
+    #: people: "is this instrument finished?" is a whole document and usually Legal's, while
+    #: "did this clause replace that one?" is two paragraphs side by side.
+    CLAUSE_REVIEW = "clause_review"
 
 
 class ReviewTaskState(StrEnum):

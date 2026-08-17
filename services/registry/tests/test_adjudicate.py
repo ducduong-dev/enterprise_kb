@@ -156,6 +156,11 @@ def test_argument_order_does_not_decide_direction() -> None:
     assert first.old == second.old
     assert first.new == second.new
     assert first.supersedes_from == second.supersedes_from == Y2026
+    # Including the delta a steward reads. It is computed left-to-right until direction is
+    # known, so without recomputing it here the same change reads "11000 → 15000" or
+    # "15000 → 11000" depending only on which document a backfill happened to reach first.
+    assert first.quantity_delta == second.quantity_delta
+    assert first.quantity_delta == {"changed": ["11000 đồng → 15000 đồng"]}
 
 
 def test_a_nomination_against_the_dates_is_not_stored_as_a_supersession() -> None:

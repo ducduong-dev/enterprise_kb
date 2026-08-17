@@ -1,7 +1,8 @@
 # ADR-0033 — A detected clause supersession only proposes
 
-**Status:** proposed · **Date:** 2026-08-13 · **Amended:** 2026-08-17, by a second reading of
-graphiti-core at source (see *What re-reading Graphiti's source changed* at the end).
+**Status:** proposed · **Date:** 2026-08-13 · **Amended:** 2026-08-17 three times — by a second
+reading of graphiti-core at source, and by building gate 5 and the funnel. All three are recorded
+in sections at the end rather than folded into the text above.
 
 ## Context
 
@@ -290,9 +291,54 @@ a pure abrogation — the opposite of what it means. A clause can also be `diffe
 one candidate and `superseded` by another, which the unique index forbids outright.
 
 So gate 5 returns a verdict and writes nothing, and only `SUPERSEDED` maps onto `propose()`.
-Where the other three are persisted is now an open question this ADR does not answer, and it is a
-real one rather than a detail: without a record of "we looked at this pair and it was fine", a
-corpus-wide backfill re-adjudicates every rejected pair on every run, which is precisely the cost
-ADR-0035's cache exists to avoid and which the cache cannot fix on its own — a cache hit still
-costs the pair-assembly and the gates. It needs a table of its own, keyed on the pair, and it
-belongs with the orchestrator rather than here.
+
+**Answered by `clause_pair_verdicts` (migration 0012), built with the funnel.** This table
+records the *adjudication*; `clause_supersessions` records the *consequence*, and only one of
+the four buckets has one. Four things about its shape are decisions rather than details:
+
+* **Recording is the requirement, resumability is the bonus.** The AC says a same-subject pair
+  differing only in customer segment is *recorded* `different_scope`, and this is where. The
+  cost argument for the table was overstated when this section was first written: ADR-0035's
+  cache already makes a repeated model call free, so what a stored verdict saves is the pair
+  assembly and the gates, not the expensive part.
+* **A row means we reached a conclusion.** Nothing is written for a pair gate 2 rejected (not a
+  pair) or for one the model could not answer about (unreachable, unreadable reply). No row
+  therefore means "never looked at, or looked at and did not conclude", and both must be
+  retried — the whole retry rule, with no state column to keep in step.
+* **The pair is normalized, not directional.** Stored with the lexically smaller
+  `(document_id, section_path)` first and enforced by a check constraint, so adjudicating A
+  against B and later B against A is one row. Direction lives in `clause_supersessions` where
+  it means something; here it would give one pair two identities and let a backfill do the work
+  twice.
+* **`text_digest` is what keeps a stored verdict honest**, hashing both clause texts and the
+  prompt version. A reworded clause no longer matches and is adjudicated again. Same rule as
+  ADR-0035's cache key and for the same reason: an id survives an edit that changes the answer,
+  and the text does not.
+
+## Corrections from building the funnel
+
+Two more, from wiring the gates together (`kb_registry.funnel`, 2026-08-17).
+
+**The three paths are per document *pair*, not per document.** The Decision section reads as
+though a document is on Path A, B or C. It is not: a circular routinely has an `amends` edge
+naming articles to one instrument, an edge with no article list to a second, and no edge at all
+to a third, and all three neighbours are in scope of the same run. So the funnel resolves the
+path per neighbour — skipping Path A neighbours entirely, searching Path B neighbours with the
+relaxed subject gate, and filtering both out of the corpus-wide Path C sweep so a pair is never
+formed twice by two routes.
+
+**Path B's basis is `detected`, not `edge_article`.** The Storage section lists `edge_article`
+as a basis and it is tempting to give it to Path B, since an edge is what put the pair in scope.
+That would overstate the evidence on exactly the rows a steward is deciding. `edge_article`
+means *the corpus named the articles* — that is Path A, where nothing is detected and no row is
+written here at all. On Path B the edge said only that two documents are related; which clause
+replaced which is still our inference, adjudicated by the same model on the same four buckets as
+Path C. The path is recorded on the review task, where it is useful context, rather than in
+`basis`, where it would be a claim about provenance that is not true.
+
+One more thing the funnel's tests caught, in gate 5 rather than in the funnel. The quantity delta
+was computed in the order the pair was passed, so a run that happened to start at the newer
+document produced `10%/năm → 8%/năm` — a steward's queue reading every change backwards, and the
+same rule appearing to move in opposite directions depending only on which document a backfill
+reached first. The delta is now recomputed old→new once direction is known, which is the first
+moment it *can* be: gate 5 is deliberately not told which clause is older.

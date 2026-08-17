@@ -241,7 +241,7 @@ class ReviewTaskRow(Base):
     __table_args__ = (
         CheckConstraint(
             "task_type IN ('idp_review','identity_review','merge_review','impact_review',"
-            "'pii_override','expiry_review','periodic_review')",
+            "'pii_override','expiry_review','periodic_review','clause_review')",
             name="ck_tasks_type",
         ),
         CheckConstraint("state IN ('open','claimed','decided','cancelled')", name="ck_tasks_state"),
@@ -480,6 +480,67 @@ class ClauseSupersessionRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     #: Set by the row that replaces this one. NULL = the current belief.
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ClausePairVerdictRow(Base):
+    """What the funnel concluded about two clauses — including that nothing is wrong (ADR-0033).
+
+    The companion to `ClauseSupersessionRow` and not a duplicate of it: this records the
+    *adjudication*, that one records the *consequence*, and only one of the four buckets has a
+    consequence. A `different_scope` verdict cannot live there — `uq_clause_sup_open` allows one
+    open row per replaced clause, and a null replacement there reads as a pure abrogation.
+
+    The pair is normalized so that the lexically smaller `(document_id, section_path)` is always
+    the left side, which is what makes "have we already looked at these two" one lookup instead
+    of two. Direction is not stored here; it belongs where it has meaning.
+
+    Not append-only, unlike the ledgers. This is a record of work done rather than a belief
+    anyone reasons about historically, and `text_digest` — a hash of both clause texts — already
+    answers the only historical question worth asking: whether the verdict is still about the
+    text it was made about. A clause that was reworded no longer matches and is re-adjudicated.
+    """
+
+    __tablename__ = "clause_pair_verdicts"
+    __table_args__ = (
+        CheckConstraint(
+            "verdict IN ('same_rule_restated','superseded','different_scope',"
+            "'conflicting_unresolved')",
+            name="ck_pair_verdict",
+        ),
+        CheckConstraint(
+            "left_document_id <> right_document_id OR left_section_path <> right_section_path",
+            name="ck_pair_not_self",
+        ),
+        CheckConstraint(
+            "(left_document_id, left_section_path) < (right_document_id, right_section_path)",
+            name="ck_pair_normalized",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    left_document_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    left_section_path: Mapped[str] = mapped_column(Text, nullable=False)
+    right_document_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+    )
+    right_section_path: Mapped[str] = mapped_column(Text, nullable=False)
+    verdict: Mapped[str] = mapped_column(Text, nullable=False)
+    #: Which step reached it, so "how many pairs did the gates resolve and how many did the
+    #: model" is a query rather than an estimate. The number gate 5 is judged by.
+    settled_by: Mapped[str] = mapped_column(Text, nullable=False)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    quantity_delta: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    scope_facets: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    score: Mapped[float | None] = mapped_column(Float)
+    model: Mapped[str | None] = mapped_column(Text)
+    prompt_version: Mapped[str | None] = mapped_column(Text)
+    text_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    detected_by: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class GraphServingRow(Base):

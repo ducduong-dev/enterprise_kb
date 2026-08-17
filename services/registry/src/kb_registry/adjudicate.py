@@ -145,6 +145,12 @@ class ClauseAdjudicator:
         self._generation = generation
         self._prompt = (prompt or ADJUDICATOR_PROMPT).read_text(encoding="utf-8")
 
+    @property
+    def prompt_version(self) -> str:
+        """What a stored verdict has to match to still be current. Callers that cache a verdict
+        put this in their key, so a prompt change invalidates exactly its own results."""
+        return PROMPT_VERSION
+
     def adjudicate(self, left: Clause, right: Clause) -> Adjudication:
         """What these two clauses are to each other.
 
@@ -307,6 +313,14 @@ class ClauseAdjudicator:
             new=newer.ref,
             # Guaranteed non-None: `older_first` returns a direction only when both dates exist.
             supersedes_from=newer.window.effective_from,
+            # Recomputed old→new, not left→right. Until this point the delta ran in whatever
+            # order the caller passed the pair, so a funnel started at the newer document
+            # produced "10%/năm → 8%/năm" — a steward's queue reading the change backwards, and
+            # the same rule appearing to move in opposite directions depending on which
+            # document a backfill happened to reach first. Direction is only knowable here.
+            quantity_delta={
+                "changed": describe_quantities(compare_quantities(older.text, newer.text))
+            },
         )
 
     def _ask(self, prompt: str) -> dict[str, Any]:

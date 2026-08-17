@@ -28,18 +28,29 @@ def make_document(
     category: str = DEFAULT_CATEGORY,
     status: str = "published",
     doc_class: str = "operational",
+    legal_number: str | None = None,
 ) -> uuid.UUID:
+    """`legal_number` is optional because most callers do not care; M9d's funnel does, because
+    the instrument code in it is what breaks a same-day tie between two clauses."""
     doc_id = uuid.uuid4()
     session.execute(
         text(
             """
-            INSERT INTO documents (id, title, doc_class, category_path, visibility,
+            INSERT INTO documents (id, title, legal_number, doc_class, category_path, visibility,
                                    allowed_groups, status, created_at, updated_at)
-            VALUES (:id, :title, CAST(:doc_class AS doc_class), CAST(:cat AS ltree),
-                    'internal_all', '{}', CAST(:status AS doc_status), now(), now())
+            VALUES (:id, :title, :legal_number, CAST(:doc_class AS doc_class),
+                    CAST(:cat AS ltree), 'internal_all', '{}', CAST(:status AS doc_status),
+                    now(), now())
             """
         ),
-        {"id": doc_id, "title": title, "cat": category, "status": status, "doc_class": doc_class},
+        {
+            "id": doc_id,
+            "title": title,
+            "legal_number": legal_number,
+            "cat": category,
+            "status": status,
+            "doc_class": doc_class,
+        },
     )
     return doc_id
 
@@ -92,25 +103,40 @@ def make_chunk(
     tombstoned: bool = False,
     category: str = DEFAULT_CATEGORY,
     ordinal: int = 0,
+    section_path: str = "Điều 1",
+    body: str = "Nội dung thử nghiệm.",
+    subject_key: str | None = None,
+    embedding: str | None = None,
 ) -> uuid.UUID:
+    """The last four arguments exist for M9d's funnel, which pairs clauses by what they say.
+
+    Defaults reproduce exactly what this helper produced before they were added, so every
+    existing caller is unaffected. `subject_key` and `embedding` are the two channels gate 1
+    searches on — a chunk with neither is invisible to candidate generation, which is the right
+    default for tests that are not about it.
+    """
     chunk_id = uuid.uuid4()
     session.execute(
         text(
             """
             INSERT INTO chunks (id, document_id, version_id, section_path, citation_label, text,
-                                embedding, visibility, allowed_groups, department, category_path,
-                                doc_class, doc_status, effective_from, effective_to, tombstoned,
-                                ordinal, page)
-            VALUES (:id, :doc, :ver, 'Điều 1', 'Điều 1', 'Nội dung thử nghiệm.',
-                    CAST(:embedding AS vector), 'internal_all', '{}', NULL, CAST(:cat AS ltree),
-                    'operational', 'published', :eff_from, :eff_to, :tombstoned, :ordinal, 1)
+                                subject_key, embedding, visibility, allowed_groups, department,
+                                category_path, doc_class, doc_status, effective_from,
+                                effective_to, tombstoned, ordinal, page)
+            VALUES (:id, :doc, :ver, :section_path, :section_path, :body,
+                    :subject_key, CAST(:embedding AS vector), 'internal_all', '{}', NULL,
+                    CAST(:cat AS ltree), 'operational', 'published', :eff_from, :eff_to,
+                    :tombstoned, :ordinal, 1)
             """
         ),
         {
             "id": chunk_id,
             "doc": document_id,
             "ver": version_id,
-            "embedding": _ZERO_VECTOR,
+            "section_path": section_path,
+            "body": body,
+            "subject_key": subject_key,
+            "embedding": embedding or _ZERO_VECTOR,
             "cat": category,
             "eff_from": effective_from,
             "eff_to": effective_to,
