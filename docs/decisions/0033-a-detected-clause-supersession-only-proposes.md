@@ -261,3 +261,38 @@ conventions coexist in this platform, but `DeclarationReview._dates` returns the
 function with the boundary reasoning stated in its docstring, so the changeover day has one
 answer. The detected path writes `supersedes_from` and no expiry, so only one end of that pair
 applies to it — and it takes the date from the same helper rather than recomputing it.
+
+## Corrections from building gate 5
+
+Two claims above did not survive contact with the code (`kb_registry.adjudicate`, 2026-08-17).
+Both are recorded rather than quietly fixed, because each was a plausible sentence that would
+have produced the wrong behaviour.
+
+**A verdict that contradicts the dates is not dropped — it becomes `conflicting_unresolved`.**
+The Graphiti section above said "dropped with a log line rather than stored", and building it
+made that look like exactly the failure this ADR exists to prevent. The prompt is not shown the
+effective dates, so a model nominating the *older* clause as the replacement is not noise: it is
+an independent reading that disagrees with the dates, on a pair the model has already said states
+one rule. Dropping it discards a real finding silently, which is ADR-0028's failure mode wearing
+a cautious face. It goes to a person instead, carrying both the model's own rationale and the
+note that the two disagreed. What the original sentence was protecting is untouched and is the
+part that mattered: **no `superseded` row is ever written against the dates.**
+
+The same treatment covers the case the ADR did specify — direction `undecidable`, from an undated
+pair or a same-day pair of equal rank — so there is one route out of gate 5 for "the model judged
+this a supersession and the dates would not confirm which way", and it is a person's queue.
+
+**`clause_supersessions` can hold only one of the four buckets.** The Storage section describes
+the row as carrying a `verdict`, which reads as though all four live there. They cannot: the
+table answers "what replaced this clause", `uq_clause_sup_open` allows one open row per replaced
+clause, and a `different_scope` verdict stored with a null replacement is indistinguishable from
+a pure abrogation — the opposite of what it means. A clause can also be `different_scope` against
+one candidate and `superseded` by another, which the unique index forbids outright.
+
+So gate 5 returns a verdict and writes nothing, and only `SUPERSEDED` maps onto `propose()`.
+Where the other three are persisted is now an open question this ADR does not answer, and it is a
+real one rather than a detail: without a record of "we looked at this pair and it was fine", a
+corpus-wide backfill re-adjudicates every rejected pair on every run, which is precisely the cost
+ADR-0035's cache exists to avoid and which the cache cannot fix on its own — a cache hit still
+costs the pair-assembly and the gates. It needs a table of its own, keyed on the pair, and it
+belongs with the orchestrator rather than here.

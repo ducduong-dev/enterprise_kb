@@ -1,0 +1,227 @@
+# Clause pairs — the fixture eval for services/registry/prompts/clause_adjudicator.md (M9d gate 5).
+#
+# Each entry is one pair as gate 5 sees it: two clause texts from two instruments, with the
+# effective dates the *platform* uses to decide direction and the prompt is never shown.
+#
+#   expect:          — the bucket a correct adjudication lands in.
+#   settled_by:      — which step should reach that verdict. `scope`, `identical_text` and
+#                      `effectivity` entries must be answered with NO model call; an entry
+#                      that starts needing one is a regression in the cheap gates even when
+#                      the final bucket is still right. This is the split ADR-0033 asks the
+#                      eval to report and the number that says whether gate 5 is affordable.
+#   replacement:     — which side (0 or 1) is the replacement, for `superseded` entries.
+#                      `null` where the text alone cannot say; the dates then decide unopposed.
+#   note:            — why this pair is in the set. Every entry is here to catch something.
+#
+# For the entries that need a model, `expect` is what is graded and `settled_by` is the route
+# they are expected to take — a `conflicting_unresolved` the model reaches directly rather than
+# through the direction cross-check is the same right answer. For the deterministic entries
+# `settled_by` is graded too, and by a test that runs with no model at all
+# (services/registry/tests/test_adjudicate_fixtures.py), so those four cannot silently start
+# costing a call.
+#
+# The `different_scope` block is the important one. It is the expensive false positive — two
+# rules that coexist, reported as one having killed the other — and its rate is the number
+# ADR-0033 says must not get worse. Entries marked `settled_by: model` in that block are the
+# ones where the drafter was NOT explicit, so gate 3 cannot help and the prompt is on its own.
+#
+# NOT REAL CORPUS TEXT. Every clause below was written for this file. That is a stated
+# limitation and the same one the declared path has: until real instruments are labelled, this
+# measures the prompt against our model of Vietnamese drafting rather than against the corpus.
+# Replace these with extracts from data/ as the golden set grows.
+
+# --------------------------------------------------------------- settled without a model call
+
+- id: identical-restatement
+  expect: same_rule_restated
+  settled_by: identical_text
+  note: >-
+    Verbatim match. Must never reach the model — this is the fast path that keeps a
+    corpus-wide backfill affordable.
+  left:
+    text: "Lãi suất cho vay ngắn hạn bằng đồng Việt Nam là 8%/năm."
+    effective_from: 2023-01-01
+  right:
+    text: "Lãi suất cho vay ngắn hạn bằng đồng Việt Nam là 8%/năm."
+    effective_from: 2026-01-01
+
+- id: segment-split
+  expect: different_scope
+  settled_by: scope
+  note: >-
+    The M9d acceptance criterion. Same subject, same units, different customer segment,
+    both stated explicitly — gate 3 settles it and no model is called.
+  left:
+    text: "Hạn mức rút tiền mặt tại ATM đối với khách hàng cá nhân là 50 triệu đồng/ngày."
+    effective_from: 2023-01-01
+  right:
+    text: "Hạn mức rút tiền mặt tại ATM đối với khách hàng doanh nghiệp là 100 triệu đồng/ngày."
+    effective_from: 2026-01-01
+
+- id: currency-split
+  expect: different_scope
+  settled_by: scope
+  note: >-
+    The same trap in the currency facet. A VND rate and a USD rate are two rules, and the
+    quantity delta between them looks exactly like a supersession.
+  left:
+    text: "Lãi suất tiền gửi không kỳ hạn bằng đồng Việt Nam là 0,5%/năm."
+    effective_from: 2023-01-01
+  right:
+    text: "Lãi suất tiền gửi không kỳ hạn bằng USD là 0%/năm."
+    effective_from: 2026-01-01
+
+- id: never-concurrent
+  expect: null
+  settled_by: effectivity
+  note: >-
+    Windows that never met. Not a pair, nothing recorded — the older clause had already
+    ended before the newer one took effect.
+  left:
+    text: "Phí phát hành thẻ ghi nợ nội địa là 50.000 đồng."
+    effective_from: 2022-01-01
+    effective_to: 2022-12-31
+  right:
+    text: "Phí phát hành thẻ ghi nợ nội địa là 70.000 đồng."
+    effective_from: 2023-01-01
+
+# ----------------------------------------------------------------------- the model's own work
+
+- id: fee-changed
+  expect: superseded
+  settled_by: model
+  replacement: 1
+  note: >-
+    The base case. Same fee, different amount, no scope stated either side. The delta is
+    handed to the model computed; it judges rather than counts.
+  left:
+    text: "Phí chuyển tiền trong nước qua kênh quầy là 11.000 đồng/giao dịch."
+    effective_from: 2023-01-01
+  right:
+    text: "Phí chuyển tiền trong nước qua kênh quầy là 15.000 đồng/giao dịch."
+    effective_from: 2026-01-01
+
+- id: reworded-same-rule
+  expect: same_rule_restated
+  settled_by: model
+  note: >-
+    Different words, same rule, same number. The pair the vector channel of gate 1 exists
+    to find and that the model must not call a supersession.
+  left:
+    text: "Tỷ lệ an toàn vốn tối thiểu của ngân hàng thương mại là 8%."
+    effective_from: 2023-01-01
+  right:
+    text: "Ngân hàng thương mại phải duy trì tỷ lệ an toàn vốn ở mức không thấp hơn 8%."
+    effective_from: 2026-01-01
+
+- id: condition-added-no-number-moved
+  expect: superseded
+  settled_by: model
+  replacement: 1
+  note: >-
+    Why gate 4 does not decide. The quantity delta is EMPTY and the rule still changed —
+    a new condition was added. An implementation that read "same numbers ⇒ restatement" off
+    the extractor would get this wrong, which is the whole reason the delta is evidence for
+    the model rather than a verdict of its own.
+  left:
+    text: "Khách hàng được rút tiền mặt tối đa 50 triệu đồng/ngày."
+    effective_from: 2023-01-01
+  right:
+    text: "Khách hàng được rút tiền mặt tối đa 50 triệu đồng/ngày, trừ trường hợp tài khoản
+      đang bị phong tỏa hoặc có dấu hiệu giao dịch bất thường."
+    effective_from: 2026-01-01
+
+- id: term-split-unstated
+  expect: different_scope
+  settled_by: model
+  note: >-
+    The hard different-scope case: the facet is in the subject rather than in an
+    applicability clause, so gate 3 finds no stated conflict and the prompt is alone with it.
+    Graphiti's "5 miles Tuesday / 3 miles Wednesday" example is here to catch exactly this.
+  left:
+    text: "Lãi suất tiền gửi kỳ hạn 6 tháng là 5,2%/năm."
+    effective_from: 2023-01-01
+  right:
+    text: "Lãi suất tiền gửi kỳ hạn 12 tháng là 6,1%/năm."
+    effective_from: 2023-06-01
+
+- id: contradiction-same-day
+  expect: conflicting_unresolved
+  settled_by: direction
+  note: >-
+    Two in-force clauses that contradict each other on the same date with equal rank.
+    A genuine finding the bank wants to know about, and precisely what a confidence threshold
+    would have thrown away.
+  left:
+    text: "Thời hạn xử lý hồ sơ là 05 ngày làm việc."
+    effective_from: 2026-01-01
+    instrument: TT
+  right:
+    text: "Thời hạn xử lý hồ sơ là 03 ngày làm việc."
+    effective_from: 2026-01-01
+    instrument: TT
+
+- id: rank-breaks-the-tie
+  expect: superseded
+  settled_by: model
+  replacement: 1
+  note: >-
+    Same effective date, different instrument rank — a Nghị định displaces a Thông tư.
+    The one tie-break `older_first` allows.
+  left:
+    text: "Mức vốn pháp định của công ty tài chính là 500 tỷ đồng."
+    effective_from: 2026-01-01
+    instrument: TT
+  right:
+    text: "Mức vốn pháp định của công ty tài chính là 800 tỷ đồng."
+    effective_from: 2026-01-01
+    instrument: ND
+
+- id: vietnamese-separators
+  expect: superseded
+  settled_by: model
+  replacement: 1
+  note: >-
+    "1.500.000" is one and a half million here, not 1.5. The delta reaching the prompt
+    already parsed is what keeps this out of the model's hands.
+  left:
+    text: "Phí thường niên thẻ tín dụng hạng chuẩn là 300.000 đồng."
+    effective_from: 2023-01-01
+  right:
+    text: "Phí thường niên thẻ tín dụng hạng chuẩn là 1.500.000 đồng."
+    effective_from: 2026-01-01
+
+# ------------------------------------------------------------------- the direction cross-check
+
+- id: elaboration-reads-newer
+  expect: superseded
+  settled_by: model
+  replacement: null
+  note: >-
+    A pair where the text genuinely does not say which side replaced which — the newer
+    clause is simply a different number. `null` is the honest nomination, and the dates then
+    decide unopposed. An entry that starts returning 0 or 1 here means the prompt has begun
+    guessing direction, which is what withholding the dates exists to prevent.
+  left:
+    text: "Tỷ lệ dự trữ bắt buộc đối với tiền gửi không kỳ hạn là 3%."
+    effective_from: 2023-01-01
+  right:
+    text: "Tỷ lệ dự trữ bắt buộc đối với tiền gửi không kỳ hạn là 4%."
+    effective_from: 2026-01-01
+
+- id: replacement-names-its-target
+  expect: superseded
+  settled_by: model
+  replacement: 1
+  note: >-
+    Here the text DOES say. The replacing clause refers to the rule it changes, so the
+    nomination should agree with the dates — the case where the cross-check confirms rather
+    than contradicts. Note this pair would normally be caught by M9c's declared path; it is
+    in this set to check the model reads the cue when it survives to gate 5.
+  left:
+    text: "Phí bảo lãnh là 1,5%/năm tính trên số tiền bảo lãnh."
+    effective_from: 2023-01-01
+  right:
+    text: "Mức phí bảo lãnh quy định trước đây được điều chỉnh thành 2%/năm tính trên số tiền
+      bảo lãnh."
+    effective_from: 2026-01-01

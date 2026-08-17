@@ -11,6 +11,10 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "kb-indexer",
+    # Reached transitively through kb-indexer until now, while `anchors`, `service` and the M9d
+    # gates all import it directly. An undeclared dependency that happens to resolve is a
+    # packaging bug waiting for the day the transitive path changes.
+    "kb-vntext",
 ]
 
 [build-system]
@@ -26,3 +30,4 @@ kb-schemas = { workspace = true }
 kb-authz = { workspace = true }
 kb-ports = { workspace = true }
 kb-indexer = { workspace = true }
+kb-vntext = { workspace = true }
