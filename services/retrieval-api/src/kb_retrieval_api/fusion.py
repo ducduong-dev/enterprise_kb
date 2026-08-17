@@ -14,7 +14,7 @@ surface is more trustworthy than one either ranks first alone.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from uuid import UUID
 
@@ -96,3 +96,56 @@ def cap_per_document(hits: Iterable[FusedHit], limit: int) -> list[FusedHit]:
         seen[item.hit.document_id] = count + 1
         kept.append(item)
     return kept
+
+
+#: A clause, addressed the way `clause_supersessions` addresses it. Never a chunk id: chunk ids
+#: are re-minted by every rechunk, and the supersession record deliberately does not use them.
+ClauseKey = tuple[UUID, str]
+
+
+def drop_superseded(
+    hits: Sequence[FusedHit], replacements: Mapping[ClauseKey, ClauseKey]
+) -> tuple[list[FusedHit], list[FusedHit]]:
+    """Remove a superseded clause when its replacement is here too (ADR-0033).
+
+    Returns `(kept, dropped)`, because a caller that silently discarded passages would be
+    unauditable — the dropped list goes to the audit record, so "why was this not in the
+    answer" has an answer months later.
+
+    **Only when the replacement is actually in the candidate set.** Dropping a superseded
+    clause whose replacement the query did not find would leave the reader with nothing where
+    they previously had something out of date, and out of date with a pointer is strictly more
+    useful than absent. This is the whole condition: without it the answer quotes two different
+    interest rates and leaves the customer to choose, which is the actual harm; with it applied
+    unconditionally the answer would sometimes say nothing at all.
+
+    Runs on the fused candidates rather than on the final selection, so the freed slot goes to
+    the next-best passage instead of shortening the answer. The residual case — the replacement
+    is here now and the reranker or the per-document cap cuts it later — leaves the reader with
+    neither, and is accepted because the replacement outranking its own predecessor on a query
+    that matched the predecessor is the ordinary outcome, not the exception.
+
+    A chain (A replaced by B, B replaced by C, all three present) drops A and B on the same
+    pass: each is judged against its own replacement, so no ordering of the map matters and
+    nothing needs to walk the chain.
+    """
+    if not replacements:
+        return list(hits), []
+
+    present = {
+        (item.hit.document_id, item.hit.section_path)
+        for item in hits
+        if item.hit.section_path is not None
+    }
+    kept: list[FusedHit] = []
+    dropped: list[FusedHit] = []
+    for item in hits:
+        if item.hit.section_path is None:
+            kept.append(item)
+            continue
+        replacement = replacements.get((item.hit.document_id, item.hit.section_path))
+        if replacement is not None and replacement in present:
+            dropped.append(item)
+        else:
+            kept.append(item)
+    return kept, dropped

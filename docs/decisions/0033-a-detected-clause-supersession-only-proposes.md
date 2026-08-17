@@ -1,8 +1,8 @@
 # ADR-0033 — A detected clause supersession only proposes
 
-**Status:** proposed · **Date:** 2026-08-13 · **Amended:** 2026-08-17 three times — by a second
-reading of graphiti-core at source, and by building gate 5 and the funnel. All three are recorded
-in sections at the end rather than folded into the text above.
+**Status:** proposed · **Date:** 2026-08-13 · **Amended:** 2026-08-17 four times — by a second
+reading of graphiti-core at source, and by building gate 5, the funnel and the retrieval side.
+All four are recorded in sections at the end rather than folded into the text above.
 
 ## Context
 
@@ -342,3 +342,37 @@ document produced `10%/năm → 8%/năm` — a steward's queue reading every cha
 same rule appearing to move in opposite directions depending only on which document a backfill
 reached first. The delta is now recomputed old→new once direction is known, which is the first
 moment it *can* be: gate 5 is deliberately not told which clause is older.
+
+## Corrections from building the retrieval side
+
+One, and it is an access decision that the Behaviour section got wrong by omission.
+
+**The pointer has two halves and they obey different rules.** ADR-0033 says a confirmed
+supersession "flags the older chunk *with a pointer*: `RetrievedChunk` gains `superseded_by`, so
+the answer can say *Điều 8.2 đã được thay thế bởi Điều 5 A*". Built literally, that sentence
+names another document to whoever retrieved the older clause — including a reader the filter
+would never have shown the replacement to. `compile_sql_graph` refuses exactly this for an edge,
+in as many words: *"what matters here is that the existence of the target is not disclosed to
+someone who may not see it"* (INV-10). `[OPEN]`-3 leaves existence disclosure defaulting to off.
+
+So `SupersededBy` splits. **That** a clause was replaced, and on what date, is a fact about the
+clause the caller is already reading; it names nothing and is returned unconditionally, because
+withholding it leaves someone acting on a stale figure with no reason to doubt it. **What**
+replaced it — document, clause, title, citation label — is fetched through the caller's own
+`compile_sql` filter, and is absent in every field when they may not read it. `names_replacement`
+is the property an answer branches on.
+
+The same query decides a case that is not about access at all: a replacement whose chunk has been
+rechunked away resolves to nothing and is also left unnamed. Its title could be recovered from
+`documents` — but only by hand-writing a second ACL predicate over that table, which is the
+thing `compile_sql_graph`'s docstring warns produces leaks. One audited predicate that
+occasionally says less is worth more than two that can disagree.
+
+Two smaller notes from the same work. The drop runs on the **fused candidates**, before rerank,
+so the freed slot goes to the next-best passage rather than shortening the answer — which also
+means `top_k` cannot produce the "replacement not retrieved" case, since a replacement retrieved
+at all removes its predecessor however short the answer is. And every dropped passage is named in
+the audit record: it is invisible in the response by design, and "why was this clause not cited"
+is exactly the question asked months later. Unlike the ACL's silent counter (ADR-0023) there is
+nothing to conceal — the caller could have read the clause on its document page — so it is
+recorded in full rather than counted.

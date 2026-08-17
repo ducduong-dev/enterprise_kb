@@ -10,14 +10,21 @@ Pipeline:
     principal → ResolvedFilter (INV-2)
               → keyword search ∥ vector search, both filtered inside the query
               → RRF fusion
+              → drop a superseded clause whose replacement is also here (ADR-0033)
               → rerank
               → per-document cap, top_k
-              → supersession flags
+              → supersession flags and replacement pointers
               → graph expansion, filtered by the same ACL (INV-10)
               → audit record naming principal, delegate, filter, and every chunk returned (INV-11)
 
 Nothing is filtered after the fact. If a chunk reaches this code, the index already decided the
 caller may see it.
+
+The supersession drop is the one place this pipeline removes a passage the filter admitted, and
+it is not an access decision: the clause is still readable on its own document page and under
+`as_of`, and the audit record names every passage it removed. It exists because an answer that
+quotes a 2023 rate beside the 2026 rate that replaced it leaves the reader to choose, which is
+worse than either rate alone.
 """
 
 from __future__ import annotations
@@ -48,6 +55,7 @@ from kb_schemas.api import (
     RetrievedChunk,
     RetrieveRequest,
     RetrieveResponse,
+    SupersededBy,
 )
 from kb_schemas.enums import RetrievalMode
 from kb_vntext.language import fold_diacritics
@@ -56,7 +64,13 @@ from kb_vntext.sections import anchor_families, anchor_matches
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from kb_retrieval_api.fusion import FusedHit, cap_per_document, reciprocal_rank_fusion
+from kb_retrieval_api.fusion import (
+    ClauseKey,
+    FusedHit,
+    cap_per_document,
+    drop_superseded,
+    reciprocal_rank_fusion,
+)
 
 log = get_logger(__name__)
 
@@ -117,12 +131,22 @@ class RetrievalEngine:
         )
 
         candidates = self._gather(request.query, acl)
+        # Before the reranker, so the freed slot goes to the next-best passage rather than
+        # shortening the answer, and so the reranker is never asked to order a clause against
+        # the clause that replaced it (ADR-0033).
+        clause_supersessions = self._clause_supersessions(
+            {item.hit.document_id for item in candidates}, acl.effective_on
+        )
+        candidates, dropped = drop_superseded(
+            candidates, {old: new for old, (new, _) in clause_supersessions.items()}
+        )
         ranked = self._rerank(request.query, candidates)
         selected = cap_per_document(ranked, MAX_CHUNKS_PER_DOCUMENT)[: request.top_k]
 
         document_ids = {item.hit.document_id for item in selected}
         superseded = self._superseded_articles(document_ids)
         titles = self._titles(document_ids)
+        pointers = self._replacement_labels(clause_supersessions, acl)
         chunks = [
             RetrievedChunk(
                 chunk_id=item.hit.chunk_id,
@@ -136,6 +160,10 @@ class RetrievalEngine:
                 score=round(item.score, 6),
                 highlights=list(item.hit.highlights),
                 supersession_flag=_is_superseded(superseded, item.hit),
+                # A clause that survived the drop because its replacement was not retrieved is
+                # still superseded, and saying so is the point: out of date with a pointer is
+                # more useful than out of date in silence.
+                superseded_by=pointers.get((item.hit.document_id, item.hit.section_path or "")),
             )
             for item in selected
         ]
@@ -157,7 +185,7 @@ class RetrievalEngine:
         retrieval_results.observe(len(chunks))
 
         self._audit_retrieval(
-            principal, acl, chunks, expansions, request, duration_ms=int(elapsed * 1000)
+            principal, acl, chunks, expansions, request, dropped, duration_ms=int(elapsed * 1000)
         )
         log.info(
             "retrieval_complete",
@@ -389,6 +417,122 @@ class RetrievalEngine:
             {"ids": [str(document_id) for document_id in document_ids]},
         ).all()
         return {row[0]: row[1] for row in rows}
+
+    def _clause_supersessions(
+        self, document_ids: set[uuid.UUID], on: date
+    ) -> dict[ClauseKey, tuple[ClauseKey, date]]:
+        """Confirmed clause supersessions in force on `on`, keyed by the clause they replace.
+
+        Three conditions, and each is load-bearing:
+
+        * **`state = 'confirmed'`.** A proposal changes nothing a user can see. That is the
+          whole of ADR-0033 and it is enforced here rather than trusted upstream, because this
+          is the only place the funnel's output could ever reach a reader.
+        * **`closed_at IS NULL`**, so a revoked or superseded belief is not consulted. The open
+          row is the current belief; an earlier one wearing today's date would be a lie the
+          answer repeats.
+        * **`supersedes_from <= :on`**, evaluated against the query's own effective date and
+          never against "now". An `as_of` query before the replacement took effect must show
+          the older clause as current and *unflagged* — that is the property the whole expiry
+          programme exists to establish, and a pointer rendered on that query would break it
+          just as surely as hiding the clause would.
+
+        Raw SQL rather than `ClauseSupersessions.served`, because retrieval-api does not depend
+        on the registry and should not start: this is a read path and that is a write path. The
+        two queries are asserted to agree in `tests/test_clause_supersession_flow.py`, the same
+        arrangement `_superseded_articles` has with `kb_registry.publish`.
+
+        A replacement whose document the caller may not read is a separate problem and is
+        handled where the label is fetched, not here.
+        """
+        if not document_ids:
+            return {}
+        rows = self._session.execute(
+            text(
+                """
+                SELECT old_document_id, old_section_path, new_document_id, new_section_path,
+                       supersedes_from
+                FROM clause_supersessions
+                WHERE old_document_id = ANY(CAST(:ids AS uuid[]))
+                  AND closed_at IS NULL
+                  AND state = 'confirmed'
+                  AND new_document_id IS NOT NULL
+                  AND supersedes_from <= :on
+                """
+            ),
+            {"ids": [str(document_id) for document_id in document_ids], "on": on},
+        ).mappings()
+        return {
+            (row["old_document_id"], row["old_section_path"]): (
+                (row["new_document_id"], row["new_section_path"]),
+                row["supersedes_from"],
+            )
+            for row in rows
+        }
+
+    def _replacement_labels(
+        self, supersessions: dict[ClauseKey, tuple[ClauseKey, date]], acl: ResolvedFilter
+    ) -> dict[ClauseKey, SupersededBy]:
+        """Turn each pointer into something an answer can say out loud — as far as it may.
+
+        Two halves with different rules. **That** a clause was replaced is a fact about the
+        clause the caller is already reading, and it is always returned: without it they act on
+        a stale figure with no reason to doubt it. **What** replaced it names another document,
+        and naming a document the filter excluded would disclose its existence — which is
+        exactly what `compile_sql_graph` refuses to do for an edge, on the same INV-10
+        reasoning, and what `[OPEN]`-3 leaves defaulting to "do not disclose".
+
+        So the identity is fetched through the caller's own chunk filter. A replacement they
+        may read yields the citation label and title, so the sentence is "đã được thay thế bởi
+        Điều 7, Biểu phí dịch vụ 2026" rather than a UUID. Anything else yields a bare pointer
+        carrying only the date.
+
+        "Anything else" deliberately includes a case that is not an access decision: a
+        replacement whose chunk has been rechunked away or tombstoned resolves to nothing here
+        and is also left unnamed. It would be possible to recover its title from `documents`
+        and name it anyway — but only by hand-writing a second ACL predicate over that table,
+        and `compile_sql_graph`'s own docstring says why that is a bad trade. One audited
+        predicate that occasionally says less is worth more than two that can disagree.
+        """
+        if not supersessions:
+            return {}
+        keys = {new for new, _ in supersessions.values()}
+        where, params = compile_sql(acl, alias="c")
+        rows = self._session.execute(
+            text(
+                f"""
+                SELECT c.document_id, c.section_path, c.citation_label, d.title
+                FROM chunks c
+                JOIN documents d ON d.id = c.document_id
+                WHERE c.document_id = ANY(CAST(:ids AS uuid[]))
+                  AND c.section_path = ANY(CAST(:paths AS text[]))
+                  AND {where}
+                """
+            ),
+            {
+                **params,
+                "ids": [str(document_id) for document_id, _ in keys],
+                "paths": [section_path for _, section_path in keys],
+            },
+        ).mappings()
+        visible = {
+            (row["document_id"], row["section_path"]): (row["citation_label"], row["title"])
+            for row in rows
+        }
+        pointers: dict[ClauseKey, SupersededBy] = {}
+        for old, (new, supersedes_from) in supersessions.items():
+            if new not in visible:
+                pointers[old] = SupersededBy(supersedes_from=supersedes_from)
+                continue
+            citation_label, title = visible[new]
+            pointers[old] = SupersededBy(
+                supersedes_from=supersedes_from,
+                document_id=new[0],
+                section_path=new[1],
+                document_title=title,
+                citation_label=citation_label,
+            )
+        return pointers
 
     def _superseded_articles(self, document_ids: set[uuid.UUID]) -> dict[uuid.UUID, set[int]]:
         """Which articles of these documents an unconsolidated amendment targets.
@@ -688,10 +832,18 @@ class RetrievalEngine:
         chunks: list[RetrievedChunk],
         expansions: list[GraphExpansion],
         request: RetrieveRequest,
+        dropped: list[FusedHit],
         *,
         duration_ms: int,
     ) -> None:
-        """INV-11: enough to reconstruct this answer months later."""
+        """INV-11: enough to reconstruct this answer months later.
+
+        `superseded_dropped` is why this needs the dropped list. A passage the funnel removed
+        because its replacement was also retrieved is invisible in the response by design, and
+        "why was this clause not in the answer" is exactly the question somebody asks months
+        later. Unlike the ACL's silent counter (ADR-0023), there is nothing to disclose here —
+        the caller could read the clause on its document page — so it is recorded in full.
+        """
         self._write_audit(
             AuditRecord(
                 action=AuditAction.RETRIEVE,
@@ -702,6 +854,7 @@ class RetrievalEngine:
                     "version_ids": sorted({str(chunk.version_id) for chunk in chunks}),
                     "document_ids": sorted({str(chunk.document_id) for chunk in chunks}),
                     "expansion_document_ids": [str(e.document_id) for e in expansions],
+                    "superseded_dropped": [str(item.hit.chunk_id) for item in dropped],
                 },
                 resolved_filter=acl.audit_payload(),
                 detail={

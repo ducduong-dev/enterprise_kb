@@ -26,7 +26,7 @@ from kb_ports.adapters.rerank import LexicalRerankAdapter
 from kb_ports.indexes import IndexHit
 from kb_registry.testing import make_chunk, make_document, make_version
 from kb_retrieval_api.engine import MAX_CHUNKS_PER_DOCUMENT, RetrievalEngine
-from kb_retrieval_api.fusion import cap_per_document, reciprocal_rank_fusion
+from kb_retrieval_api.fusion import cap_per_document, drop_superseded, reciprocal_rank_fusion
 from kb_schemas.api import (
     CitationLookupRequest,
     Facets,
@@ -389,6 +389,71 @@ def test_fusion_never_duplicates_a_chunk() -> None:
     same = IndexHit(chunk_id=seed, document_id=seed, version_id=seed, score=1.0, text="x")
     fused = reciprocal_rank_fusion({"keyword": [same], "vector": [same]})
     assert len(fused) == 1
+
+
+def _clause(document: uuid.UUID, section_path: str | None) -> IndexHit:
+    return IndexHit(
+        chunk_id=uuid.uuid4(),
+        document_id=document,
+        version_id=document,
+        score=1.0,
+        section_path=section_path,
+    )
+
+
+def test_a_superseded_clause_is_dropped_when_its_replacement_is_here_too() -> None:
+    """The actual harm ADR-0033 names: an answer quoting two different rates and leaving the
+    customer to choose."""
+    old_doc, new_doc = uuid.uuid4(), uuid.uuid4()
+    old, new = _clause(old_doc, "Điều 5"), _clause(new_doc, "Điều 7")
+    fused = reciprocal_rank_fusion({"keyword": [old, new]})
+
+    kept, dropped = drop_superseded(fused, {(old_doc, "Điều 5"): (new_doc, "Điều 7")})
+
+    assert [item.chunk_id for item in kept] == [new.chunk_id]
+    assert [item.chunk_id for item in dropped] == [old.chunk_id]
+
+
+def test_a_superseded_clause_survives_when_its_replacement_was_not_found() -> None:
+    """Out of date with a pointer beats absent. Dropping unconditionally would leave the reader
+    with nothing where they previously had something stale, which is the worse failure."""
+    old_doc, new_doc = uuid.uuid4(), uuid.uuid4()
+    old = _clause(old_doc, "Điều 5")
+    fused = reciprocal_rank_fusion({"keyword": [old, _clause(uuid.uuid4(), "Điều 1")]})
+
+    kept, dropped = drop_superseded(fused, {(old_doc, "Điều 5"): (new_doc, "Điều 7")})
+
+    assert old.chunk_id in [item.chunk_id for item in kept]
+    assert dropped == []
+
+
+def test_a_chain_of_replacements_drops_every_link_but_the_last() -> None:
+    """A replaced by B, B replaced by C, all three retrieved. Each is judged against its own
+    replacement, so no ordering of the map matters and nothing walks the chain."""
+    a_doc, b_doc, c_doc = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
+    a, b, c = _clause(a_doc, "Điều 1"), _clause(b_doc, "Điều 1"), _clause(c_doc, "Điều 1")
+    fused = reciprocal_rank_fusion({"keyword": [a, b, c]})
+
+    kept, dropped = drop_superseded(
+        fused,
+        {(a_doc, "Điều 1"): (b_doc, "Điều 1"), (b_doc, "Điều 1"): (c_doc, "Điều 1")},
+    )
+
+    assert [item.chunk_id for item in kept] == [c.chunk_id]
+    assert {item.chunk_id for item in dropped} == {a.chunk_id, b.chunk_id}
+
+
+def test_a_chunk_with_no_section_path_is_never_dropped() -> None:
+    """Front matter, an appendix, a table before Điều 1. A supersession record cannot address
+    it, so nothing can claim to have replaced it."""
+    document = uuid.uuid4()
+    hit = _clause(document, None)
+    fused = reciprocal_rank_fusion({"keyword": [hit]})
+
+    kept, dropped = drop_superseded(fused, {(document, ""): (uuid.uuid4(), "Điều 1")})
+
+    assert [item.chunk_id for item in kept] == [hit.chunk_id]
+    assert dropped == []
 
 
 def test_per_document_cap_preserves_order() -> None:

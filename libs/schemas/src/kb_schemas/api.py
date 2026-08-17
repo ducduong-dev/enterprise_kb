@@ -55,6 +55,43 @@ class RetrieveRequest(BaseModel):
         return self
 
 
+class SupersededBy(BaseModel):
+    """The clause that replaced this one, on a confirmed detection (ADR-0033).
+
+    A pointer rather than a banner. It exists so an answer can say "Điều 8.2 đã được thay thế
+    bởi Điều 5 Thông tư 09/2026" instead of raising a generic warning the reader cannot act on
+    — the citation label and title are here for exactly that sentence.
+
+    Its presence never means the clause was hidden. An inference is our conclusion about two
+    texts, not the corpus stating that a rule ended, so it flags and points and nothing more;
+    only a *declared* supersession writes the expiry ledger and takes a clause off the default
+    path (ADR-0040).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: When the replacement took effect. The one field always present: it is a fact about the
+    #: clause the caller is already reading, and it names nothing.
+    supersedes_from: date
+    #: The replacement, when this caller may see it. **All four are None when they may not** —
+    #: not because the warning is withheld, but because naming the replacing instrument would
+    #: disclose the existence of a document the filter excluded, which is precisely what
+    #: `compile_sql_graph` refuses to do for edges (INV-10, `[OPEN]`-3).
+    #:
+    #: So the warning is unconditional and the identity is not. A reader who cannot open the
+    #: replacement still learns the rule changed — which is the half that stops them acting on
+    #: a stale figure — and learns nothing about what replaced it.
+    document_id: UUID | None = None
+    section_path: str | None = None
+    document_title: str | None = None
+    citation_label: str | None = None
+
+    @property
+    def names_replacement(self) -> bool:
+        """Whether an answer can say *what* replaced the clause, or only *that* something did."""
+        return self.document_id is not None
+
+
 class RetrievedChunk(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -78,6 +115,11 @@ class RetrievedChunk(BaseModel):
     #: True when the source document is amended by an instrument whose consolidation is not
     #: yet approved — the answer must warn rather than present the text as current (M5).
     supersession_flag: bool = False
+    #: Set when a *confirmed* clause-level supersession names what replaced this passage
+    #: (M9c/M9d). Distinct from `supersession_flag` and not a finer version of it: that one says
+    #: "an amendment touches this article and nobody has consolidated it yet", this one says
+    #: "this exact clause was replaced, and here is by what". A chunk can carry both.
+    superseded_by: SupersededBy | None = None
 
 
 class ResolvedAnchor(BaseModel):
