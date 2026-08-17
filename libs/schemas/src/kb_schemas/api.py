@@ -259,6 +259,10 @@ class Citation(BaseModel):
     quote: str | None = None
     #: The cited document is amended and not yet consolidated (M5). Rendered as a warning.
     supersession_flag: bool = False
+    #: A confirmed clause supersession names what replaced this passage (M9c/M9d). Carried onto
+    #: the citation so the answer's source list can say so **whether or not the model
+    #: mentioned it** — the prompt rule is the improvement, this is the guarantee.
+    superseded_by: SupersededBy | None = None
 
 
 class ChatResponse(BaseModel):

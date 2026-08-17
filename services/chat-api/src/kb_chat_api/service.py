@@ -52,6 +52,15 @@ SUPERSESSION_WARNING = (
     "Một số điều khoản được trích dẫn đang có văn bản sửa đổi chưa được hợp nhất; "
     "hãy kiểm tra bản hợp nhất trước khi áp dụng."
 )
+#: Separate from the warning above, and deliberately stronger. That one says an amendment
+#: exists somewhere in the document; this one says the cited clause itself has been replaced,
+#: and a reader acting on the quoted figure would be acting on a rule that changed. Raised
+#: from the citation rather than from the answer text, so it appears whether or not the model
+#: followed the prompt rule (ADR-0033).
+REPLACED_CLAUSE_WARNING = (
+    "Một số điều khoản được trích dẫn đã được thay thế bởi quy định mới hơn; "
+    "hãy đối chiếu quy định hiện hành trước khi áp dụng."
+)
 PARTIAL_CONTEXT_WARNING = (
     "Câu trả lời được xây dựng từ một phần các đoạn tìm được; hãy mở văn bản gốc nếu cần đầy đủ."
 )
@@ -217,6 +226,8 @@ class ChatService:
         warnings: list[str] = []
         if any(citation.supersession_flag for citation in verified.citations):
             warnings.append(SUPERSESSION_WARNING)
+        if any(citation.superseded_by is not None for citation in verified.citations):
+            warnings.append(REPLACED_CLAUSE_WARNING)
         if context.dropped:
             warnings.append(PARTIAL_CONTEXT_WARNING)
 

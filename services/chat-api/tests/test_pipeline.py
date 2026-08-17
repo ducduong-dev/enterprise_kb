@@ -8,6 +8,7 @@ resolves to a version, an ungrounded answer becomes a refusal, and every outcome
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
 import pytest
 from kb_authz.fixtures import ALL_PRINCIPALS
@@ -27,6 +28,7 @@ from kb_schemas.api import (
     RetrievedChunk,
     RetrieveRequest,
     RetrieveResponse,
+    SupersededBy,
 )
 from kb_schemas.enums import PrincipalKind
 
@@ -38,7 +40,11 @@ KYC = "Khi mở tài khoản, đơn vị phải thực hiện nhận biết khá
 
 
 def chunk(
-    text: str, *, label: str = "Điều 6 TT 41/2016/TT-NHNN", superseded: bool = False
+    text: str,
+    *,
+    label: str = "Điều 6 TT 41/2016/TT-NHNN",
+    superseded: bool = False,
+    replaced_by: SupersededBy | None = None,
 ) -> RetrievedChunk:
     return RetrievedChunk(
         chunk_id=uuid.uuid4(),
@@ -49,7 +55,24 @@ def chunk(
         text=text,
         score=0.9,
         supersession_flag=superseded,
+        superseded_by=replaced_by,
     )
+
+
+def named_replacement() -> SupersededBy:
+    """A replacement the caller may read, so the answer can point somewhere."""
+    return SupersededBy(
+        supersedes_from=date(2026, 1, 1),
+        document_id=uuid.uuid4(),
+        section_path="Điều 7",
+        document_title="Thông tư 09/2026/TT-NHNN",
+        citation_label="Điều 7 TT 09/2026/TT-NHNN",
+    )
+
+
+def unnamed_replacement() -> SupersededBy:
+    """A replacement the caller may *not* read: the warning survives, the identity does not."""
+    return SupersededBy(supersedes_from=date(2026, 1, 1))
 
 
 class FakeFunnel:
@@ -169,6 +192,34 @@ def test_a_supersession_warning_reaches_the_reader() -> None:
     response = answer(service, ask())
     assert response.citations[0].supersession_flag
     assert any("hợp nhất" in warning for warning in response.warnings)
+
+
+def test_a_replaced_clause_warns_the_reader_whatever_the_model_wrote() -> None:
+    """The guarantee, as distinct from the prompt rule. A model that ignores rule 6 and quotes
+    the stale figure as current still produces a response whose citation carries the pointer
+    and whose warnings say the clause was replaced."""
+    ignored_the_rule = "Tỷ lệ an toàn vốn tối thiểu là 8% [1]."
+    service, _, _ = build(
+        FakeFunnel(chunks=[chunk(CAPITAL, replaced_by=named_replacement())]),
+        generation=ScriptedGeneration(responses=[ignored_the_rule]),
+    )
+
+    response = answer(service, ask())
+
+    assert response.citations[0].superseded_by is not None
+    assert response.citations[0].superseded_by.section_path == "Điều 7"
+    assert any("đã được thay thế" in warning for warning in response.warnings)
+
+
+def test_the_replaced_warning_is_not_raised_for_an_ordinary_amendment() -> None:
+    """M5's warning and M9's are different sentences about different things, and a document
+    with an unconsolidated amendment must not be reported as a replaced clause."""
+    service, _, _ = build(FakeFunnel(chunks=[chunk(CAPITAL, superseded=True)]))
+
+    response = answer(service, ask())
+
+    assert response.citations[0].superseded_by is None
+    assert not any("đã được thay thế" in warning for warning in response.warnings)
 
 
 def test_personal_data_is_filtered_out_of_the_answer() -> None:
@@ -310,6 +361,72 @@ def test_a_passage_is_dropped_whole_or_not_at_all() -> None:
 def test_the_supersession_flag_reaches_the_prompt() -> None:
     context = assemble([chunk(CAPITAL, superseded=True)])
     assert "[CẢNH BÁO]" in context.render()
+
+
+def test_a_replaced_clause_reaches_the_prompt_naming_what_replaced_it() -> None:
+    """The model cannot say "this was replaced by Điều 7" unless it is told, and the pointer is
+    the only place that information exists — fusion dropped the replacement from the context
+    precisely because it was *not* retrieved."""
+    context = assemble([chunk(CAPITAL, replaced_by=named_replacement())])
+    rendered = context.render()
+    assert "[ĐÃ THAY THẾ]" in rendered
+    assert "01/01/2026" in rendered
+    assert "Điều 7 TT 09/2026/TT-NHNN" in rendered
+    # And it must not invite a citation marker: the replacement is not a numbered passage.
+    assert "không gán số trích dẫn" in rendered
+
+
+def test_an_unreadable_replacement_is_dated_but_never_named() -> None:
+    """The ACL half of the pointer, carried through to the prompt. The model is told the clause
+    changed and told not to speculate about what to — naming it would disclose a document the
+    filter excluded (INV-10)."""
+    context = assemble([chunk(CAPITAL, replaced_by=unnamed_replacement())])
+    rendered = context.render()
+    assert "[ĐÃ THAY THẾ]" in rendered
+    assert "01/01/2026" in rendered
+    assert "Không nêu tên hay nội dung" in rendered
+
+
+@pytest.mark.parametrize("policy", [INTERNAL, EXTERNAL])
+def test_every_marker_the_context_emits_is_explained_by_the_prompt(policy: object) -> None:
+    """The failure this catches is silent and one-sided.
+
+    `render()` puts bracketed labels into the context; the prompts are what tell the model
+    those labels mean. Delete a rule and nothing breaks — the marker still appears, the model
+    just quietly stops acting on it, and a stale rate is served with no warning by a system
+    whose tests are all green. So the two are pinned to each other rather than maintained in
+    parallel by hope.
+    """
+    prompt = policy.prompt()  # type: ignore[attr-defined]
+    for marker in ("[CẢNH BÁO]", "[ĐÃ THAY THẾ]"):
+        assert marker in prompt, f"{policy} does not explain {marker}"
+
+
+def test_the_prompts_forbid_citing_a_replacement_as_a_passage() -> None:
+    """Fusion guarantees the replacement is *not* in the context when this note appears, so a
+    marker for it would point at nothing. `verify` strips such a marker, but a model told not
+    to write one produces a better answer than one corrected afterwards.
+
+    Emphasis and line wrapping are normalised away before matching. The rule reads "**không**
+    gán số trích dẫn" in one prompt and "không gán số trích dẫn" in the other, and in both it
+    wraps across a line at whatever column the paragraph happened to reach. An assertion that
+    broke on where a writer put an asterisk or a newline would be a test about markdown."""
+    for policy in (INTERNAL, EXTERNAL):
+        prose = " ".join(policy.prompt().replace("**", "").split())
+        assert "không gán số trích dẫn" in prose
+
+
+def test_a_passage_nothing_replaced_carries_no_note() -> None:
+    assert "[ĐÃ THAY THẾ]" not in assemble([chunk(CAPITAL)]).render()
+
+
+def test_the_two_supersession_notes_are_independent() -> None:
+    """M5's flag is about the document, M9's pointer is about the clause. A passage can carry
+    both, and neither may swallow the other."""
+    context = assemble([chunk(CAPITAL, superseded=True, replaced_by=named_replacement())])
+    rendered = context.render()
+    assert "[CẢNH BÁO]" in rendered and "[ĐÃ THAY THẾ]" in rendered
+    assert context.superseded and context.replaced
 
 
 # ------------------------------------------------------------------------- verification

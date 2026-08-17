@@ -1,8 +1,8 @@
 # ADR-0033 — A detected clause supersession only proposes
 
-**Status:** proposed · **Date:** 2026-08-13 · **Amended:** 2026-08-17 four times — by a second
-reading of graphiti-core at source, and by building gate 5, the funnel and the retrieval side.
-All four are recorded in sections at the end rather than folded into the text above.
+**Status:** proposed · **Date:** 2026-08-13 · **Amended:** 2026-08-17 five times — by a second
+reading of graphiti-core at source, and by building gate 5, the funnel, the retrieval side and
+the answer. All five are recorded in sections at the end rather than folded into the text above.
 
 ## Context
 
@@ -376,3 +376,32 @@ the audit record: it is invisible in the response by design, and "why was this c
 is exactly the question asked months later. Unlike the ACL's silent counter (ADR-0023) there is
 nothing to conceal — the caller could have read the clause on its document page — so it is
 recorded in full rather than counted.
+
+## Corrections from building the answer
+
+**The prompt rule is the improvement; the citation is the guarantee.** ADR-0033 says the pointer
+exists "so the answer can say *Điều 8.2 đã được thay thế bởi Điều 5 A* rather than raising a
+generic banner", which reads as though the sentence is the deliverable. It is not, and building
+it that way would have been a mistake: a model that ignores the rule produces an answer quoting
+a superseded figure as current, and nothing downstream would know. So `Citation` carries
+`superseded_by` and `ChatService` raises `REPLACED_CLAUSE_WARNING` from the *citation* rather
+than from the answer text. The reader is warned whether or not the model cooperated; the prompt
+rule is what makes the warning unnecessary in the good case.
+
+That warning is deliberately a second one rather than a reuse of M5's. "This document has an
+unconsolidated amendment somewhere in it" and "the clause you are reading was replaced" are
+different claims of different strength, and collapsing them would make the stronger one
+invisible inside a sentence stewards already skim past.
+
+**Both halves of `SupersededBy` reach the prompt, and the unnamed half carries an instruction.**
+Where the caller may not read the replacement the context note gives the date and then says, in
+the note itself, not to name or describe it. A note that merely omitted the name would invite a
+model to fill the gap from the question or from its own weights, which is the one way this
+feature could turn an access control into a disclosure.
+
+**The replacement is never a numbered passage.** Fusion drops a superseded clause whenever its
+replacement was retrieved, so a clause that reaches the context carrying this note is precisely
+one whose replacement is absent from it. Both prompts therefore forbid assigning it a `[n]`
+marker, and a test pins every bracketed label `render()` can emit to a rule in both prompt files
+— because deleting a rule breaks nothing visible: the marker still appears, the model quietly
+stops acting on it, and a stale rate is served with no warning by a build that is entirely green.

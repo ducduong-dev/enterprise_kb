@@ -141,16 +141,21 @@ class AssembledContext:
     def superseded(self) -> bool:
         return any(item.chunk.supersession_flag for item in self.items)
 
+    @property
+    def replaced(self) -> bool:
+        """Whether any passage here is a clause a confirmed newer one replaced.
+
+        Different question from `superseded`, which asks whether the *document* has an
+        unconsolidated amendment somewhere in it. This one is about the passage in hand.
+        """
+        return any(item.chunk.superseded_by is not None for item in self.items)
+
     def render(self) -> str:
         """The context block the prompt embeds. One passage per numbered section."""
         blocks = []
         for item in self.items:
-            flag = (
-                "\n[CẢNH BÁO] Văn bản này đang có văn bản sửa đổi chưa được hợp nhất."
-                if item.chunk.supersession_flag
-                else ""
-            )
-            blocks.append(f"[{item.marker}] {item.heading}\n{item.chunk.text.strip()}{flag}")
+            notes = _amendment_note(item) + _replacement_note(item)
+            blocks.append(f"[{item.marker}] {item.heading}\n{item.chunk.text.strip()}{notes}")
         return "\n\n".join(blocks)
 
     def by_marker(self, marker: int) -> ContextItem | None:
@@ -158,6 +163,44 @@ class AssembledContext:
             if item.marker == marker:
                 return item
         return None
+
+
+def _amendment_note(item: ContextItem) -> str:
+    """M5's document-level warning: an amendment exists and nobody has consolidated it."""
+    if not item.chunk.supersession_flag:
+        return ""
+    return "\n[CẢNH BÁO] Văn bản này đang có văn bản sửa đổi chưa được hợp nhất."
+
+
+def _replacement_note(item: ContextItem) -> str:
+    """M9's clause-level pointer: *this* passage was replaced, and here is by what.
+
+    **The replacement is never one of the numbered passages.** Fusion drops a superseded clause
+    whenever its replacement was retrieved too, so a clause that reaches the context carrying
+    this note is one whose replacement is *not* here — which is exactly why the note has to
+    name it in prose. The prompt tells the model not to invent a marker for it; `verify` strips
+    one if it does.
+
+    Two forms, because `SupersededBy` has two. Where the caller may read the replacement it is
+    named, so the answer can point somewhere. Where they may not, the date is all there is, and
+    the note says so plainly rather than hinting at a document the reader cannot reach — the
+    model is told to advise checking the current version instead of speculating about it.
+    """
+    pointer = item.chunk.superseded_by
+    if pointer is None:
+        return ""
+    when = pointer.supersedes_from.strftime("%d/%m/%Y")
+    if not pointer.names_replacement:
+        return (
+            f"\n[ĐÃ THAY THẾ] Từ ngày {when}, điều khoản này đã được thay thế bằng quy định "
+            "khác không có trong ngữ cảnh. Không nêu tên hay nội dung của quy định đó."
+        )
+    where = pointer.citation_label or pointer.section_path or ""
+    named = f"{pointer.document_title} — {where}" if pointer.document_title else where
+    return (
+        f"\n[ĐÃ THAY THẾ] Từ ngày {when}, điều khoản này đã được thay thế bởi: {named}. "
+        "Quy định thay thế không nằm trong ngữ cảnh, không gán số trích dẫn cho nó."
+    )
 
 
 def assemble(
@@ -235,6 +278,9 @@ def verify(answer: str, context: AssembledContext) -> VerifiedAnswer:
             section_path=item.chunk.section_path,
             quote=item.chunk.text.strip()[:QUOTE_CHARS],
             supersession_flag=item.chunk.supersession_flag,
+            # Carried whatever the model wrote. A prompt rule improves the answer's prose; this
+            # is what makes the source list correct even when the model ignored it.
+            superseded_by=item.chunk.superseded_by,
         )
         for marker, item in sorted(supported.items())
     ]
