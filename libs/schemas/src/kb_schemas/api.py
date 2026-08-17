@@ -312,6 +312,37 @@ class Citation(BaseModel):
     #: the citation so the answer's source list can say so **whether or not the model
     #: mentioned it** — the prompt rule is the improvement, this is the guarantee.
     superseded_by: SupersededBy | None = None
+    #: Where to open it, built from `(document_id, version_id, section_path)` and never from
+    #: `chunk_id` (ADR-0038). Relative: each surface prepends its own origin.
+    link: str = ""
+
+
+class Source(BaseModel):
+    """A document that contributed a passage to the context (ADR-0037/0038).
+
+    The companion list to `citations`, and it answers a different question. Citations are what
+    the model *claimed* and `verify` checks each one; sources are what was *read*, whether or
+    not the model marked it. A reader judging whether an answer covered the ground needs the
+    second, and it is not the model's to curate — an answer that quietly drew on four documents
+    and cited one looks better-sourced than it is, in exactly the direction that misleads.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    document_id: UUID
+    version_id: UUID
+    document_title: str | None = None
+    citation_label: str | None = None
+    section_path: str | None = None
+    link: str = ""
+    #: How it reached the context: `ranked` if retrieval returned it, otherwise the fact-set
+    #: channel that found it. Rendered, because "the bank says these are the same rule" and
+    #: "they read alike" are different grounds for a reader to trust a source.
+    channel: Literal["ranked", "reference", "subject", "vector"] = "ranked"
+    #: Whether the model actually cited it. False is the interesting value: the passage was in
+    #: front of the model and it wrote around it.
+    cited: bool = False
+    superseded_by: SupersededBy | None = None
 
 
 class ChatResponse(BaseModel):
@@ -330,3 +361,6 @@ class ChatResponse(BaseModel):
     #: True when the PII output filter removed something before the answer was returned
     #: (INV-7). The audit record says what kind; the response never repeats the value.
     redacted: bool = False
+    #: Every document the context drew on, with a link each (INV-13, ADR-0037/0038). Longer
+    #: than `citations` whenever the model wrote around a passage it was given.
+    sources: list[Source] = Field(default_factory=list)

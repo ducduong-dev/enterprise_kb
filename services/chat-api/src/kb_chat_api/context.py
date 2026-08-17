@@ -28,9 +28,11 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from uuid import UUID
 
 from kb_common.logging import get_logger
 from kb_schemas.api import Citation, RetrievedChunk
+from kb_schemas.links import document_link
 
 log = get_logger(__name__)
 
@@ -132,6 +134,11 @@ class AssembledContext:
     #: Passages dropped for budget. Surfaced as a warning: an answer built from half the
     #: evidence should say so.
     dropped: int = 0
+    #: Documents of which *nothing* survived the budget. This is the number an answer speaks,
+    #: not `dropped`: a reader cares how many sources went unread, and losing a second clause
+    #: of a document already in the context is depth rather than coverage. Counted separately
+    #: from what the *filter* removed, and only this one is ever spoken (ADR-0023/0037).
+    dropped_documents: int = 0
 
     @property
     def empty(self) -> bool:
@@ -203,21 +210,54 @@ def _replacement_note(item: ContextItem) -> str:
     )
 
 
+def coverage_first(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """Re-order so the budget buys breadth before depth (ADR-0037).
+
+    A flat ranked list spends the budget on the top document's third clause while the fourth
+    document's first clause never appears — which is precisely the failure INV-13 names, and it
+    happens *before* any truncation, in the order the passages are considered.
+
+    So documents are visited in the order they first appear (their best rank), one passage each,
+    then a second round, and so on. Within a document the original order is kept: ranking is
+    still the right answer to "which of this document's clauses", it is only the wrong answer to
+    "which document next".
+    """
+    by_document: dict[UUID, list[RetrievedChunk]] = {}
+    for chunk in chunks:
+        by_document.setdefault(chunk.document_id, []).append(chunk)
+
+    ordered: list[RetrievedChunk] = []
+    rounds = max((len(group) for group in by_document.values()), default=0)
+    for index in range(rounds):
+        for group in by_document.values():
+            if index < len(group):
+                ordered.append(group[index])
+    return ordered
+
+
 def assemble(
     chunks: list[RetrievedChunk], *, max_tokens: int = DEFAULT_CONTEXT_TOKENS
 ) -> AssembledContext:
     budget = max_tokens * CHARS_PER_TOKEN
     context = AssembledContext()
     used = 0
-    for chunk in chunks:
+    kept_documents: set[UUID] = set()
+    dropped_documents: set[UUID] = set()
+    for chunk in coverage_first(chunks):
         cost = len(chunk.text) + len(chunk.citation_label or "") + 16
         if used + cost > budget and context.items:
             # Truncating a passage would let the model cite half a clause as though it were
             # the clause. Whole passages or none.
             context.dropped += 1
+            dropped_documents.add(chunk.document_id)
             continue
         context.items.append(ContextItem(marker=len(context.items) + 1, chunk=chunk))
+        kept_documents.add(chunk.document_id)
         used += cost
+    # A document counts as cut only when *nothing* of it survived. One of its clauses falling
+    # out while another stayed is depth lost, not coverage, and reporting it as a missing
+    # source would overstate what the answer left out.
+    context.dropped_documents = len(dropped_documents - kept_documents)
     return context
 
 
@@ -277,6 +317,11 @@ def verify(answer: str, context: AssembledContext) -> VerifiedAnswer:
             chunk_id=item.chunk.chunk_id,
             section_path=item.chunk.section_path,
             quote=item.chunk.text.strip()[:QUOTE_CHARS],
+            link=document_link(
+                item.chunk.document_id,
+                version_id=item.chunk.version_id,
+                section_path=item.chunk.section_path,
+            ),
             supersession_flag=item.chunk.supersession_flag,
             # Carried whatever the model wrote. A prompt rule improves the answer's prose; this
             # is what makes the source list correct even when the model ignored it.

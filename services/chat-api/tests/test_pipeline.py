@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import date
+from typing import Literal
 
 import pytest
 from kb_authz.fixtures import ALL_PRINCIPALS
 from kb_chat_api.condense import QueryCondenser
-from kb_chat_api.context import assemble, verify
+from kb_chat_api.context import assemble, coverage_first, verify
 from kb_chat_api.service import ChatService
 from kb_chat_api.surfaces import EXTERNAL, INTERNAL, policy_for
 from kb_common.audit import AuditAction, InMemoryAuditSink
@@ -25,6 +26,8 @@ from kb_schemas.api import (
     ChatMessage,
     ChatRequest,
     ChatResponse,
+    FactMember,
+    FactSet,
     RetrievedChunk,
     RetrieveRequest,
     RetrieveResponse,
@@ -75,19 +78,51 @@ def unnamed_replacement() -> SupersededBy:
     return SupersededBy(supersedes_from=date(2026, 1, 1))
 
 
+def fact_set_for(
+    document: uuid.UUID,
+    text: str,
+    *,
+    channel: Literal["reference", "subject", "vector"] = "subject",
+    seed: uuid.UUID | None = None,
+) -> FactSet:
+    """One other document stating the seed's rule, as retrieval would return it."""
+    return FactSet(
+        seed_chunk_id=seed or uuid.uuid4(),
+        members=[
+            FactMember(
+                chunk_id=uuid.uuid4(),
+                version_id=uuid.uuid4(),
+                document_id=document,
+                document_title="Văn bản khác",
+                citation_label="Điều 3",
+                section_path="Điều 3",
+                text=text,
+                channel=channel,
+            )
+        ],
+    )
+
+
 class FakeFunnel:
     """Stands in for retrieval-api. Records the token it was handed — which is the INV-2/3
     assertion: chat-api must forward the caller's token, never one of its own."""
 
-    def __init__(self, chunks: list[RetrievedChunk] | None = None) -> None:
+    def __init__(
+        self,
+        chunks: list[RetrievedChunk] | None = None,
+        fact_sets: list[FactSet] | None = None,
+    ) -> None:
         self.chunks = chunks if chunks is not None else [chunk(CAPITAL)]
+        self.fact_sets = fact_sets or []
         self.tokens: list[str] = []
         self.requests: list[RetrieveRequest] = []
 
     def retrieve(self, token: str, request: RetrieveRequest) -> RetrieveResponse:
         self.tokens.append(token)
         self.requests.append(request)
-        return RetrieveResponse(chunks=self.chunks, resolved_filter_id="filter-abc")
+        return RetrieveResponse(
+            chunks=self.chunks, fact_sets=self.fact_sets, resolved_filter_id="filter-abc"
+        )
 
     def citation_lookup(self, token: str, request: object) -> RetrieveResponse:  # pragma: no cover
         raise NotImplementedError
@@ -220,6 +255,78 @@ def test_the_replaced_warning_is_not_raised_for_an_ordinary_amendment() -> None:
 
     assert response.citations[0].superseded_by is None
     assert not any("đã được thay thế" in warning for warning in response.warnings)
+
+
+def test_every_document_read_becomes_a_source_whether_cited_or_not() -> None:
+    """The two lists answer different questions. An answer that drew on two documents and cited
+    one looks better-sourced than it is, in exactly the direction that misleads."""
+    other = uuid.uuid4()
+    service, _, _ = build(
+        FakeFunnel(
+            chunks=[chunk(CAPITAL)],
+            fact_sets=[fact_set_for(other, "Ngân hàng duy trì tỷ lệ an toàn vốn 8%.")],
+        ),
+        generation=ScriptedGeneration(responses=["Tỷ lệ an toàn vốn tối thiểu là 8% [1]."]),
+    )
+
+    response = answer(service, ask())
+
+    assert len(response.citations) == 1
+    assert len(response.sources) == 2
+    cited = {s.document_id: s.cited for s in response.sources}
+    assert cited[response.citations[0].document_id] is True
+    assert cited[other] is False
+
+
+def test_a_source_carries_a_link_built_from_stable_identifiers() -> None:
+    """Never the chunk id: `_insert_chunks` re-mints those on every rechunk, and a link inside
+    a saved answer is exactly the boundary a derived identifier must not cross (ADR-0038)."""
+    service, _, _ = build(FakeFunnel(chunks=[chunk(CAPITAL)]))
+
+    response = answer(service, ask())
+
+    source = response.sources[0]
+    assert source.link.startswith(f"/documents/{source.document_id}")
+    assert f"version={source.version_id}" in source.link
+    assert str(response.citations[0].chunk_id) not in source.link
+    assert response.citations[0].link == source.link
+
+
+def test_a_fact_set_member_keeps_the_channel_that_found_it() -> None:
+    """ "The bank said these are the same rule" and "they read alike" are different grounds for
+    a reader to trust a source, and guessing the label later from a score would call a
+    `reference` member `subject`."""
+    other = uuid.uuid4()
+    service, _, _ = build(
+        FakeFunnel(
+            chunks=[chunk(CAPITAL)],
+            fact_sets=[
+                fact_set_for(other, "Ngân hàng duy trì tỷ lệ an toàn vốn 8%.", channel="reference")
+            ],
+        )
+    )
+
+    response = answer(service, ask())
+
+    by_document = {s.document_id: s.channel for s in response.sources}
+    assert by_document[other] == "reference"
+
+
+def test_a_truncated_answer_says_how_many_documents_it_left_out() -> None:
+    """The count is safe and the identities are not: a reader told "three more state this"
+    learns the shape of what they are missing, a reader told *which* three would learn the
+    existence of documents the filter may have been keeping from them (ADR-0023)."""
+    # Real text, repeated: garbage would fail the relevance floor and refuse before assembly,
+    # and each passage has to be over half the default budget for the second to fall out.
+    bulky = (CAPITAL + " ") * 66
+    service, _, _ = build(
+        FakeFunnel(chunks=[chunk(bulky, label="Điều 1"), chunk(bulky, label="Điều 2")])
+    )
+
+    response = answer(service, ask())
+
+    assert any("văn bản khác" in warning for warning in response.warnings)
+    assert not any("một phần các đoạn" in warning for warning in response.warnings)
 
 
 def test_personal_data_is_filtered_out_of_the_answer() -> None:
@@ -356,6 +463,79 @@ def test_a_passage_is_dropped_whole_or_not_at_all() -> None:
     assert len(context.items) == 1
     assert context.dropped == 2
     assert context.items[0].chunk.text == long_text
+
+
+# --------------------------------------------------------------------- coverage before depth
+
+
+def doc_chunk(document: uuid.UUID, text: str, *, label: str) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=uuid.uuid4(),
+        version_id=uuid.uuid4(),
+        document_id=document,
+        citation_label=label,
+        section_path=label,
+        text=text,
+        score=0.5,
+    )
+
+
+def test_the_budget_buys_breadth_before_depth() -> None:
+    """The failure INV-13 names, and it happens in the *order* passages are considered rather
+    than in the truncation: a flat list spends the budget on the top document's third clause
+    while the fourth document's first clause never appears."""
+    first, second = uuid.uuid4(), uuid.uuid4()
+    flat = [
+        doc_chunk(first, "A một", label="Điều 1"),
+        doc_chunk(first, "A hai", label="Điều 2"),
+        doc_chunk(first, "A ba", label="Điều 3"),
+        doc_chunk(second, "B một", label="Điều 9"),
+    ]
+
+    ordered = coverage_first(flat)
+
+    assert [c.text for c in ordered] == ["A một", "B một", "A hai", "A ba"]
+
+
+def test_ranking_still_decides_which_clause_of_a_document() -> None:
+    """Coverage-before-depth reorders documents, never the passages inside one: ranking is
+    still the right answer to "which of this document's clauses"."""
+    document = uuid.uuid4()
+    chunks = [doc_chunk(document, f"clause {i}", label=f"Điều {i}") for i in range(4)]
+
+    assert [c.text for c in coverage_first(chunks)] == [c.text for c in chunks]
+
+
+def test_a_document_losing_one_clause_is_not_a_lost_source() -> None:
+    """`dropped_documents` is what the answer speaks, and it counts documents of which
+    *nothing* survived. Reporting a document that kept its first clause would overstate what
+    the answer left out."""
+    first, second = uuid.uuid4(), uuid.uuid4()
+    long_text = "x" * 400
+    # Budget for two passages of three. Coverage-first orders them first#1, second#1, first#2 —
+    # so the document that loses one still has its first clause in the context.
+    context = assemble(
+        [
+            doc_chunk(first, long_text, label="Điều 1"),
+            doc_chunk(first, long_text, label="Điều 2"),
+            doc_chunk(second, long_text, label="Điều 9"),
+        ],
+        max_tokens=225,
+    )
+
+    assert [item.chunk.document_id for item in context.items] == [first, second]
+    assert context.dropped == 1
+    assert context.dropped_documents == 0
+
+
+def test_a_document_that_lost_everything_is_counted_as_a_lost_source() -> None:
+    first, second = uuid.uuid4(), uuid.uuid4()
+    context = assemble(
+        [doc_chunk(first, "x" * 900, label="Điều 1"), doc_chunk(second, "y" * 900, label="Điều 9")],
+        max_tokens=200,
+    )
+
+    assert context.dropped_documents == 1
 
 
 def test_the_supersession_flag_reaches_the_prompt() -> None:
