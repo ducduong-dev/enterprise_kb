@@ -23,10 +23,25 @@ from kb_registry.funnel import ClauseFunnel
 from kb_registry.supersession import ClauseRef, ClauseSupersessions
 from kb_registry.testing import make_chunk, make_document, make_version
 from kb_schemas.enums import SupersessionBasis, SupersessionVerdict
-from sqlalchemy import text
+from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def _only_the_fixtures(pristine_corpus: Engine) -> None:
+    """Hide every non-fixture document for the duration of each test.
+
+    Path C searches the *whole corpus* by design, so these tests are sensitive to whatever else
+    is in the database — and after the corpus was rechunked to populate `subject_key`, the real
+    uploaded instruments became findable by the lexical channel and every pair count here
+    changed. The funnel was behaving correctly; the tests were measuring the machine.
+
+    `pristine_corpus` tombstones the rest for the test and restores exactly those rows after,
+    which is the same remedy the index-adapter and retrieval-engine tests already use.
+    """
+
 
 Y2023 = date(2023, 1, 1)
 Y2026 = date(2026, 1, 1)
