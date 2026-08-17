@@ -82,6 +82,23 @@ def test_the_browser_needs_one_port_and_one_origin() -> None:
     assert "realms|resources|js" in nginx, "the login page needs its own assets too"
 
 
+def test_the_portal_origin_routes_chat_to_chat_api() -> None:
+    """The chat page 404'd for a while: the bundle calls `/api/v1/chat/internal`, `/api/`
+    forwards to portal-api, and portal-api has no chat route — that endpoint only exists on
+    chat-api. The dev server must split `/api` the same way, or `npm run dev` and the image
+    disagree about which routes exist."""
+    nginx = (ROOT / "frontend" / "portal" / "nginx.conf").read_text(encoding="utf-8")
+    assert "location /api/v1/chat/" in nginx, "a longer prefix than /api/, so nginx prefers it"
+    assert "proxy_pass http://chat-api:8000/v1/chat/;" in nginx
+
+    vite = (ROOT / "frontend" / "portal" / "vite.config.ts").read_text(encoding="utf-8")
+    chat_port = COMPOSE["services"]["chat-api"]["ports"][0].split(":")[0]
+    assert f'"/api/v1/chat": {{\n        target: "http://localhost:{chat_port}"' in vite
+
+    api = (ROOT / "frontend" / "portal" / "src" / "api.ts").read_text(encoding="utf-8")
+    assert '"/v1/chat/internal"' in api, "the path both proxies are cut for"
+
+
 def test_only_the_service_the_browser_calls_allows_a_browser_origin() -> None:
     """portal-api is the one the portal's JavaScript talks to. Everything else is called
     service-to-service and should answer no preflight at all."""
