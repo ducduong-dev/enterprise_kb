@@ -73,46 +73,75 @@ LEGAL_ONE = "u-m5-legal-one"
 LEGAL_TWO = "u-m5-legal-two"
 
 #: A token unique to this fixture, so the retrieval assertions cannot match the seed corpus.
-MARKER = "M5CONSOLID"
+#: Every fixture in this file stamps its own text with a marker and then *searches* for it, so
+#: the marker has to be unique per test rather than per module.
+#:
+#: These tests must commit — the whole point of the file is what other connections observe
+#: after a publish — so each one leaves its corpus behind for the rest of the session. With one
+#: shared marker they all became mutually findable: 52 documents matched it after a single run
+#: of this file, and a query with `top_k=20` and three chunks per document could no longer
+#: reach the corpus under test. The suffix was already uniquifying legal numbers for exactly
+#: this reason and simply had not reached the text.
+Sections = list[tuple[str, str]]
+
+
+def marker_for(suffix: str) -> str:
+    return f"M5CONSOLID{suffix}"
+
 
 # The original circular. Điều 6 is what the amendment will change; Điều 12 is left alone, so
 # an unchanged article showing up as "amended" is a visible failure rather than a silent one.
-ORIGINAL = [
-    (
-        "Điều 6. Tỷ lệ dự trữ bắt buộc",
-        f"Tổ chức tín dụng phải duy trì tỷ lệ dự trữ bắt buộc tối thiểu là 3% "
-        f"trên tổng số dư tiền gửi {MARKER}.",
-    ),
-    (
-        "Điều 12. Báo cáo định kỳ",
-        f"Tổ chức tín dụng gửi báo cáo về Ngân hàng Nhà nước trước ngày 10 hằng tháng {MARKER}.",
-    ),
-]
+def original(marker: str) -> Sections:
+    return [
+        (
+            "Điều 6. Tỷ lệ dự trữ bắt buộc",
+            f"Tổ chức tín dụng phải duy trì tỷ lệ dự trữ bắt buộc tối thiểu là 3% "
+            f"trên tổng số dư tiền gửi {marker}.",
+        ),
+        (
+            "Điều 12. Báo cáo định kỳ",
+            f"Tổ chức tín dụng gửi báo cáo về Ngân hàng Nhà nước trước ngày 10 hằng tháng "
+            f"{marker}.",
+        ),
+    ]
+
 
 # The consolidated text: Điều 6 raised to 5%, Điều 12 untouched, one new article added.
-CONSOLIDATED = [
-    (
-        "Điều 6. Tỷ lệ dự trữ bắt buộc",
-        f"Tổ chức tín dụng phải duy trì tỷ lệ dự trữ bắt buộc tối thiểu là 5% "
-        f"trên tổng số dư tiền gửi {MARKER}.",
-    ),
-    (
-        "Điều 12. Báo cáo định kỳ",
-        f"Tổ chức tín dụng gửi báo cáo về Ngân hàng Nhà nước trước ngày 10 hằng tháng {MARKER}.",
-    ),
-    (
-        "Điều 13. Hiệu lực thi hành",
-        f"Điều này có hiệu lực kể từ ngày 01 tháng 01 năm 2027 {MARKER}.",
-    ),
-]
+def consolidated(marker: str) -> Sections:
+    return [
+        (
+            "Điều 6. Tỷ lệ dự trữ bắt buộc",
+            f"Tổ chức tín dụng phải duy trì tỷ lệ dự trữ bắt buộc tối thiểu là 5% "
+            f"trên tổng số dư tiền gửi {marker}.",
+        ),
+        (
+            "Điều 12. Báo cáo định kỳ",
+            f"Tổ chức tín dụng gửi báo cáo về Ngân hàng Nhà nước trước ngày 10 hằng tháng "
+            f"{marker}.",
+        ),
+        (
+            "Điều 13. Hiệu lực thi hành",
+            f"Điều này có hiệu lực kể từ ngày 01 tháng 01 năm 2027 {marker}.",
+        ),
+    ]
 
-AMENDMENT = [
-    ("Điều 1. Sửa đổi Điều 6", f"Sửa đổi tỷ lệ dự trữ bắt buộc tại Điều 6 thành 5% {MARKER}."),
-]
 
-POLICY = [
-    ("Điều 1. Phạm vi", f"Quy định nội bộ này hướng dẫn thực hiện tỷ lệ dự trữ bắt buộc {MARKER}."),
-]
+def amendment(marker: str) -> Sections:
+    return [
+        (
+            "Điều 1. Sửa đổi Điều 6",
+            f"Sửa đổi tỷ lệ dự trữ bắt buộc tại Điều 6 thành 5% {marker}.",
+        ),
+    ]
+
+
+def policy(marker: str) -> Sections:
+    return [
+        (
+            "Điều 1. Phạm vi",
+            f"Quy định nội bộ này hướng dẫn thực hiện tỷ lệ dự trữ bắt buộc {marker}.",
+        ),
+    ]
 
 
 # ------------------------------------------------------------------------------- fixture
@@ -138,6 +167,11 @@ class Fixture:
         self.embedder = HashedEmbeddingAdapter()
         self.registry = RegistryService(session)
         self.suffix = uuid.uuid4().hex[:8].upper()
+        #: This fixture's own marker, and the only string its queries should match.
+        self.marker = marker_for(self.suffix)
+        self.original = original(self.marker)
+        self.consolidated = consolidated(self.marker)
+        self.amendment_text = amendment(self.marker)
 
     # -- helpers ----------------------------------------------------------------------
 
@@ -243,20 +277,20 @@ class Fixture:
 
         self.target = self.add_document(
             "Thông tư quy định về tỷ lệ dự trữ bắt buộc",
-            ORIGINAL,
+            self.original,
             doc_class=DocClass.REGULATORY,
             category=REGULATIONS,
             legal_number=f"{self.suffix}/2026/TT-M5",
         )
         self.policy = self.add_document(
             "Quy định nội bộ về dự trữ bắt buộc",
-            POLICY,
+            policy(self.marker),
             doc_class=DocClass.INTERNAL_NORMATIVE,
             category=POLICIES,
         )
         self.amendment = self.add_document(
             "Thông tư sửa đổi, bổ sung một số điều",
-            AMENDMENT,
+            self.amendment_text,
             doc_class=DocClass.REGULATORY,
             category=REGULATIONS,
             legal_number=f"{self.suffix}/2026/TT-M5SD",
@@ -265,7 +299,7 @@ class Fixture:
         # not be tasked when Điều 6 changes, or the impact queue becomes noise.
         self.unaffected_policy = self.add_document(
             "Quy định nội bộ về chế độ báo cáo",
-            [("Điều 1. Phạm vi", f"Hướng dẫn chế độ báo cáo định kỳ {MARKER}.")],
+            [("Điều 1. Phạm vi", f"Hướng dẫn chế độ báo cáo định kỳ {self.marker}.")],
             doc_class=DocClass.INTERNAL_NORMATIVE,
             category=POLICIES,
         )
@@ -305,10 +339,11 @@ def retrieval(session: Session) -> RetrievalEngine:
     )
 
 
-def flags_for(retrieval: RetrievalEngine, document_id: uuid.UUID) -> list[bool]:
+def flags_for(retrieval: RetrievalEngine, fixture: Fixture, document_id: uuid.UUID) -> list[bool]:
+    """The marker comes from the fixture, not from the module: see `marker_for`."""
     response = retrieval.retrieve(
         ALL_PRINCIPALS["user_retail_staff"],
-        RetrieveRequest(query=f"tỷ lệ dự trữ bắt buộc {MARKER}", top_k=20),
+        RetrieveRequest(query=f"tỷ lệ dự trữ bắt buộc {fixture.marker}", top_k=20),
     ).response
     return [
         chunk.supersession_flag for chunk in response.chunks if chunk.document_id == document_id
@@ -322,12 +357,12 @@ def test_an_amendment_makes_the_target_stale_in_retrieval(
     corpus: Fixture, retrieval: RetrievalEngine
 ) -> None:
     """The bank knows Y is out of date the moment X is published; so does every answer."""
-    flags = flags_for(retrieval, corpus.target)
+    flags = flags_for(retrieval, corpus, corpus.target)
     assert flags, "the amended circular must still be retrievable"
     assert all(flags)
 
     # And not by association: the policy that implements it is not itself amended.
-    assert flags_for(retrieval, corpus.policy) in ([], [False])
+    assert flags_for(retrieval, corpus, corpus.policy) in ([], [False])
 
 
 def test_the_two_supersession_queries_agree(corpus: Fixture, retrieval: RetrievalEngine) -> None:
@@ -376,7 +411,7 @@ def test_an_amendment_naming_articles_flags_only_those(
 
     response = retrieval.retrieve(
         ALL_PRINCIPALS["user_retail_staff"],
-        RetrieveRequest(query=f"tỷ lệ dự trữ bắt buộc {MARKER}", top_k=20),
+        RetrieveRequest(query=f"tỷ lệ dự trữ bắt buộc {corpus.marker}", top_k=20),
     ).response
     chunks = [chunk for chunk in response.chunks if chunk.document_id == corpus.target]
     assert chunks, "the amended circular must still be retrievable"
@@ -394,14 +429,14 @@ def test_an_edge_with_no_article_list_still_flags_everything(
     or missing article list under-warns, which is worse. This is the guard."""
     superseded = retrieval._superseded_articles({corpus.target})
     assert superseded[corpus.target] == set(), "no articles named means the whole document"
-    assert all(flags_for(retrieval, corpus.target))
+    assert all(flags_for(retrieval, corpus, corpus.target))
 
 
 # --------------------------------------------------------------------- 2. the merge draft
 
 
 def test_the_draft_names_every_article_that_moved(corpus: Fixture) -> None:
-    new_version = corpus.add_version(corpus.target, kbdoc(CONSOLIDATED))
+    new_version = corpus.add_version(corpus.target, kbdoc(corpus.consolidated))
     corpus.session.commit()
 
     draft = asyncio.run(
@@ -430,7 +465,7 @@ def test_the_draft_names_every_article_that_moved(corpus: Fixture) -> None:
 
 def test_an_identical_resubmission_produces_no_merge(corpus: Fixture) -> None:
     """Re-uploading the same file must not create a version whose only content is a date."""
-    unchanged = corpus.add_version(corpus.target, kbdoc(ORIGINAL))
+    unchanged = corpus.add_version(corpus.target, kbdoc(corpus.original))
     corpus.session.commit()
 
     draft = asyncio.run(
@@ -448,7 +483,7 @@ def test_an_identical_resubmission_produces_no_merge(corpus: Fixture) -> None:
 
 def test_the_review_lands_with_legal_not_with_the_steward(corpus: Fixture) -> None:
     """Producing `văn bản hợp nhất` is a legal act. The steward cannot sign it off."""
-    new_version = corpus.add_version(corpus.target, kbdoc(CONSOLIDATED))
+    new_version = corpus.add_version(corpus.target, kbdoc(corpus.consolidated))
     corpus.session.commit()
     request = MergeRequest(
         document_id=str(corpus.target),
@@ -481,7 +516,7 @@ def test_the_canonical_version_does_not_flip_until_two_people_approve(
     before = repo.get_canonical_version(corpus.session, corpus.target)
     assert before is not None
 
-    new_version = corpus.add_version(corpus.target, kbdoc(CONSOLIDATED))
+    new_version = corpus.add_version(corpus.target, kbdoc(corpus.consolidated))
     corpus.session.commit()
     request = MergeRequest(
         document_id=str(corpus.target),
@@ -518,7 +553,7 @@ def test_the_canonical_version_does_not_flip_until_two_people_approve(
     # because the amendment has been folded in.
     response = retrieval.retrieve(
         ALL_PRINCIPALS["user_retail_staff"],
-        RetrieveRequest(query=f"tỷ lệ dự trữ bắt buộc {MARKER}", top_k=20),
+        RetrieveRequest(query=f"tỷ lệ dự trữ bắt buộc {corpus.marker}", top_k=20),
     ).response
     served = [chunk for chunk in response.chunks if chunk.document_id == corpus.target]
     assert served
@@ -530,7 +565,7 @@ def test_the_canonical_version_does_not_flip_until_two_people_approve(
 def test_the_consolidation_is_recorded_as_an_edge_and_an_audit_record(corpus: Fixture) -> None:
     """The edge is what clears the flag, so it is written inside the publish transaction —
     not announced afterwards by something that might not run."""
-    new_version = corpus.add_version(corpus.target, kbdoc(CONSOLIDATED))
+    new_version = corpus.add_version(corpus.target, kbdoc(corpus.consolidated))
     corpus.session.commit()
     request = MergeRequest(
         document_id=str(corpus.target),
@@ -566,7 +601,7 @@ def test_the_consolidation_is_recorded_as_an_edge_and_an_audit_record(corpus: Fi
 
 def test_a_merge_cannot_slip_past_the_pii_gate(corpus: Fixture) -> None:
     """Consolidation is a publish. Every guard that applies to a publish applies to it."""
-    new_version = corpus.add_version(corpus.target, kbdoc(CONSOLIDATED))
+    new_version = corpus.add_version(corpus.target, kbdoc(corpus.consolidated))
     corpus.registry.set_pii_status(new_version, PiiStatus.BLOCKED, actor="pii-gate")
     corpus.session.commit()
 
@@ -592,7 +627,7 @@ def test_a_merge_cannot_slip_past_the_pii_gate(corpus: Fixture) -> None:
 def test_the_policy_that_implements_the_circular_gets_a_task(corpus: Fixture) -> None:
     """Consolidating Y without telling P's owner is how an internal policy quietly starts
     contradicting the regulation it implements."""
-    new_version = corpus.add_version(corpus.target, kbdoc(CONSOLIDATED))
+    new_version = corpus.add_version(corpus.target, kbdoc(corpus.consolidated))
     corpus.session.commit()
     request = MergeRequest(
         document_id=str(corpus.target),
@@ -624,7 +659,7 @@ def test_the_policy_that_implements_the_circular_gets_a_task(corpus: Fixture) ->
 def test_nothing_is_opened_when_nothing_depends_on_the_document(corpus: Fixture) -> None:
     """A task queue that fills with noise is a task queue nobody reads."""
     new_version = corpus.add_version(
-        corpus.amendment, kbdoc([*AMENDMENT, ("Điều 2. Bổ sung", "Nội dung mới.")])
+        corpus.amendment, kbdoc([*corpus.amendment_text, ("Điều 2. Bổ sung", "Nội dung mới.")])
     )
     corpus.session.commit()
     request = MergeRequest(
@@ -642,7 +677,7 @@ def test_the_draft_classifies_what_it_could_not_confirm_as_amended(corpus: Fixtu
     from kb_identity_merge.merge import MergeDrafter
 
     drafter = MergeDrafter(ScriptedGeneration(responses=[], strict=True))
-    draft = drafter.draft(diff_documents(kbdoc(ORIGINAL), kbdoc(CONSOLIDATED)))
+    draft = drafter.draft(diff_documents(kbdoc(original("X")), kbdoc(consolidated("X"))))
 
     assert not draft.complete
     assert all(item.inferred for item in draft.classifications)
