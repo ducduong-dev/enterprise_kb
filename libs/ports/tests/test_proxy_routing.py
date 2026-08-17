@@ -46,6 +46,28 @@ def test_without_the_proxy_each_role_keeps_its_own_server() -> None:
     assert route("vlm", cfg).proxied is False
 
 
+def test_no_direct_default_points_a_container_at_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These defaults read `http://localhost:<published port>` for a long time, which inside a
+    service container is that container. `use_proxy=False` then failed with a connection refused
+    naming the caller, not the model server — and only on the fallback path, so nothing noticed
+    while the proxy was up. Service name and *container* port, as `proxy_url` already had it."""
+    roles = ("generation", "vlm", "embedding", "rerank")
+    # The default is the subject here, so the ambient `.env` must not answer for it.
+    for role in roles:
+        monkeypatch.delenv(f"KB_MODEL_{role.upper()}_URL", raising=False)
+
+    defaults = ModelGatewaySettings()
+    urls = {role: getattr(defaults, f"{role}_url") for role in roles}
+
+    for role, url in urls.items():
+        assert "localhost" not in url, f"{role} would resolve to the calling container"
+        assert "127.0.0.1" not in url, f"{role} would resolve to the calling container"
+
+    # `test_the_direct_defaults_name_services_that_exist` checks these against compose.
+    for role, url in urls.items():
+        assert route(role, settings(use_proxy=False, **{f"{role}_url": url})).base_url == url
+
+
 def test_a_route_that_leaves_the_network_is_refused_by_default() -> None:
     """[OPEN]-1 is a Compliance decision, so the platform will not make it by accident."""
     cfg = settings(vlm_model="gemini-2.0-flash", external_models=frozenset({"gemini-2.0-flash"}))

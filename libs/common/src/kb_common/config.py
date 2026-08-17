@@ -118,19 +118,24 @@ class ModelGatewaySettings(BaseSettings):
     allow_external_processing: bool = False
 
     # -------------------------------------------------------------------- roles and models
-    embedding_url: str = "http://localhost:8081"
+    #: The direct endpoints below name the compose *service* and its container port, the way
+    #: `proxy_url` does — not `localhost` and the published port. A service reading `localhost`
+    #: resolves it to its own container, so `use_proxy=False` failed with a connection refused
+    #: that named the caller rather than the model server. The published ports (8081-8084) are
+    #: for curl on the host; nothing inside the network should use them.
+    embedding_url: str = "http://embeddings:80"
     embedding_model: str = "BAAI/bge-m3"
     embedding_dim: int = 1024
-    rerank_url: str = "http://localhost:8082"
+    rerank_url: str = "http://reranker:80"
     rerank_model: str = "BAAI/bge-reranker-v2-m3"
-    vlm_url: str = "http://localhost:8083"
+    vlm_url: str = "http://vllm-vlm:8000"
     vlm_model: str = "Qwen/Qwen2.5-VL-7B-Instruct"
     #: How scanned pages are read: `paddle` runs OCR and escalates the pages it cannot read to
     #: the vision model; `vlm` transcribes every page with the vision model (ADR-0025).
     ocr_engine: Literal["paddle", "vlm"] = "paddle"
     # [OPEN]-1: local vLLM vs API model, pending the Compliance ruling. Default local.
     generation_backend: Literal["vllm", "api"] = "vllm"
-    generation_url: str = "http://localhost:8084"
+    generation_url: str = "http://vllm-generation:8000"
     generation_model: str = "Qwen/Qwen2.5-32B-Instruct"
     generation_api_key: SecretStr | None = None
 

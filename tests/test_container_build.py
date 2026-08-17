@@ -99,6 +99,30 @@ def test_the_portal_origin_routes_chat_to_chat_api() -> None:
     assert '"/v1/chat/internal"' in api, "the path both proxies are cut for"
 
 
+def test_the_direct_defaults_name_services_that_exist(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`use_proxy=False` falls back to these, so they must be reachable *in the network*: the
+    compose service name and the port the container listens on, never the published port. They
+    read `http://localhost:<published>` for a long time, which resolves to the calling container
+    — a fallback that could only ever fail, and only once the proxy was already down."""
+    from kb_common.config import ModelGatewaySettings
+
+    # Without this the ambient `.env` answers instead, and the test grades the developer's
+    # shell rather than the default.
+    for role in ("generation", "vlm", "embedding", "rerank"):
+        monkeypatch.delenv(f"KB_MODEL_{role.upper()}_URL", raising=False)
+
+    defaults = ModelGatewaySettings()
+    for role in ("generation", "vlm", "embedding", "rerank"):
+        host, _, port = getattr(defaults, f"{role}_url").removeprefix("http://").partition(":")
+        service = COMPOSE["services"].get(host)
+        assert service is not None, f"{role}_url names {host!r}, which is not a compose service"
+        container_ports = {published.split(":")[1] for published in service["ports"]}
+        assert port in container_ports, (
+            f"{role}_url uses {port}, but {host} listens on {container_ports} "
+            "(the other number is the published port, for curl on the host)"
+        )
+
+
 def test_only_the_service_the_browser_calls_allows_a_browser_origin() -> None:
     """portal-api is the one the portal's JavaScript talks to. Everything else is called
     service-to-service and should answer no preflight at all."""
